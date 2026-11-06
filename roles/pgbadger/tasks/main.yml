@@ -1,0 +1,32 @@
+---
+- name: pgBadger
+  when: pgbadger_enabled | bool
+  block:
+    - name: Install pgBadger
+      ansible.builtin.dnf:
+        name: "{{ pgbadger_packages }}"
+        state: present
+
+    - name: Output directory
+      ansible.builtin.file:
+        path: "{{ pgbadger_output_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0750"
+
+    - name: Report script
+      ansible.builtin.template:
+        src: "{{ pgbadger_script_src }}"
+        dest: "{{ pgbadger_script_dest }}"
+        owner: root
+        group: postgres
+        mode: "0750"
+
+    - name: Daily report
+      ansible.builtin.cron:
+        name: pg-ops pgbadger
+        user: postgres
+        minute: "{{ pgbadger_cron_minute }}"
+        hour: "{{ pgbadger_cron_hour }}"
+        job: "{{ pgbadger_script_dest }} >> {{ pgops_log_dir }}/pgbadger.log 2>&1"

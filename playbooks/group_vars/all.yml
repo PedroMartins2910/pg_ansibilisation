@@ -1,0 +1,58 @@
+---
+# Project-wide defaults.
+# Override them per environment in inventories/<env>/group_vars/pg_cluster/*.yml
+# (NOT in inventory group_vars/all: that has LOWER precedence than this file).
+
+pg_cluster_name: pgcluster
+pg_version: 16
+pg_port: 5432
+
+# Paths follow the PGDG RPM layout. "{version}" is substituted so that the major
+# upgrade can compute the old and new locations.
+pg_data_dir_template: "/var/lib/pgsql/{version}/data"
+pg_data_dir: "{{ pg_data_dir_template | replace('{version}', pg_version | string) }}"
+pg_bin_dir: "/usr/pgsql-{{ pg_version }}/bin"
+pg_service: "postgresql-{{ pg_version }}"
+pg_home_dir: /var/lib/pgsql
+pg_socket_dir: /run/postgresql
+
+# IP that the other nodes use to reach this node (pg_hba, repmgr conninfo, VIP guard).
+pg_node_ip: "{{ ansible_default_ipv4.address }}"
+
+# repmgr
+repmgr_user: repmgr
+repmgr_db: repmgr
+repmgr_node_name: "{{ inventory_hostname_short }}"
+repmgr_conf_path: "/etc/repmgr/{{ pg_version }}/repmgr.conf"
+repmgr_service: "repmgr-{{ pg_version }}"
+repmgr_bin: "{{ pg_bin_dir }}/repmgr"
+repmgr_cmd: "{{ repmgr_bin }} -f {{ repmgr_conf_path }}"
+repmgr_force_register: false
+
+# psql shortcut (always run with become_user: postgres)
+psql_cmd: "{{ pg_bin_dir }}/psql -X -A -t -q -p {{ pg_port }}"
+
+# VIP (moved by repmgr event hooks + vip-guard service)
+vip_enabled: true
+vip_address: ""
+vip_prefix: 24
+vip_interface: "{{ ansible_default_ipv4.interface }}"
+
+# pg-ops shared paths
+pgops_conf_dir: /etc/pg-ops
+pgops_log_dir: /var/log/pg-ops
+pgops_maintenance_flag: /etc/pg-ops/maintenance
+
+# Application database / roles (see roles/db_bootstrap)
+pg_login_users: []
+
+# pgBackRest (see roles/pgbackrest). Shared here because postgresql (archive/restore
+# command) and secrets (optional cipher pass) need them too.
+pgbackrest_stanza: "{{ pg_cluster_name }}"
+pgbackrest_encrypt: false            # true = aes-256-cbc repo encryption, passphrase from Vault
+
+# Log line prefix shared by PostgreSQL and pgBadger (Dynatrace parses it too)
+pg_log_line_prefix: "%m [%p]: user=%u,db=%d,app=%a,client=%h "
+
+# Safety switches
+pg_allow_restart: false

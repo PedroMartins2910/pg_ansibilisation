@@ -1,0 +1,13 @@
+---
+secrets_backend: hashi_vault
+hashi_vault_url: "https://vault.example.com:8200"
+hashi_vault_auth_method: approle     # token | approle | ...  (credentials from env, see README)
+hashi_vault_mount: secret
+hashi_vault_base_path: "postgres/{{ pg_cluster_name }}"
+# Secrets expected (KV v2, key "password"):
+#   secret/postgres/billing/repmgr
+#   secret/postgres/billing/users/billing_app
+#   secret/postgres/billing/users/billing_report
+#   secret/postgres/billing/users/billing_migrate
+#   secret/postgres/billing/pgbackrest_s3       (keys: access_key, secret_key)
+#   secret/postgres/billing/pgbackrest_cipher   (key "password", only if pgbackrest_encrypt: true)

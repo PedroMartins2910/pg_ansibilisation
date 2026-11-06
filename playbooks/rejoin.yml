@@ -1,0 +1,113 @@
+---
+# Turn a failed / fenced old primary into a standby of the current primary (pg_rewind).
+# Falls back to a full re-clone if the rewind fails (repmgr_rejoin_fallback_rebuild).
+#   ansible-playbook ... playbooks/rejoin.yml -e target=<old primary> -e confirm=YES
+- name: Discover and validate
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: Validate request
+      ansible.builtin.assert:
+        that:
+          - target is defined
+          - target in groups['pg_data']
+          - pg_current_primary != ''
+          - target != pg_current_primary
+          - hostvars[target].pg_node_role in ['stopped', 'standby']
+          - confirm | default('') == 'YES'
+        fail_msg: "Usage: -e target=<stopped old primary> -e confirm=YES"
+      run_once: true
+
+- name: Rejoin
+  hosts: "{{ target | default('no_target_given') }}"
+  become: true
+  tasks:
+    - name: Already a standby
+      ansible.builtin.debug:
+        msg: "{{ target }} is already a running standby - nothing to do"
+      when: pg_node_role == 'standby'
+
+    - name: Rejoin a stopped node
+      when: pg_node_role == 'stopped'
+      block:
+        - name: Stop repmgrd
+          ansible.builtin.systemd:
+            name: "{{ repmgr_service }}"
+            state: stopped
+            masked: false
+          failed_when: false
+
+        - name: Unmask and make sure PostgreSQL is stopped
+          ansible.builtin.systemd:
+            name: "{{ pg_service }}"
+            state: stopped
+            masked: false
+
+        - name: Read control file state
+          ansible.builtin.shell: >-
+            set -o pipefail;
+            LC_ALL=C {{ pg_bin_dir }}/pg_controldata {{ pg_data_dir }} | awk -F': *' '/^Database cluster state/ {print $2}'
+          become: true
+          become_user: postgres
+          register: _rj_state
+          changed_when: false
+
+        - name: Crash recovery in single-user mode (pg_rewind needs a clean shutdown)
+          ansible.builtin.shell: "{{ pg_bin_dir }}/postgres --single -D {{ pg_data_dir }} -c archive_mode=off postgres < /dev/null"
+          become: true
+          become_user: postgres
+          changed_when: true
+          when: _rj_state.stdout is not match('shut down')
+
+        - name: Rejoin dry-run
+          ansible.builtin.command: >-
+            {{ repmgr_cmd }} node rejoin -d "host={{ hostvars[pg_current_primary].pg_node_ip }} port={{ pg_port }} user={{ repmgr_user }} dbname={{ repmgr_db }}"
+            --force-rewind --config-files=postgresql.conf,pg_hba.conf,pg_ident.conf --dry-run
+          become: true
+          become_user: postgres
+          register: _rj_dry
+          changed_when: false
+          failed_when: false
+
+        - name: Rejoin with pg_rewind
+          ansible.builtin.command: >-
+            {{ repmgr_cmd }} node rejoin -d "host={{ hostvars[pg_current_primary].pg_node_ip }} port={{ pg_port }} user={{ repmgr_user }} dbname={{ repmgr_db }}"
+            --force-rewind --config-files=postgresql.conf,pg_hba.conf,pg_ident.conf --verbose
+          become: true
+          become_user: postgres
+          register: _rj
+          changed_when: true
+          failed_when: false
+          when: _rj_dry.rc == 0
+
+        - name: Fall back to a full rebuild
+          ansible.builtin.include_role:
+            name: repmgr
+            tasks_from: rebuild_standby.yml
+          when:
+            - (_rj_dry.rc != 0) or (_rj.rc | default(1) != 0)
+            - repmgr_rejoin_fallback_rebuild | bool
+
+        - name: Rejoin failed
+          ansible.builtin.fail:
+            msg: "{{ _rj_dry.stderr | default('') }} {{ _rj.stderr | default('') }}"
+          when:
+            - (_rj_dry.rc != 0) or (_rj.rc | default(1) != 0)
+            - not (repmgr_rejoin_fallback_rebuild | bool)
+
+        - name: Enable PostgreSQL
+          ansible.builtin.systemd:
+            name: "{{ pg_service }}"
+            enabled: true
+
+        - name: Start repmgrd
+          ansible.builtin.systemd:
+            name: "{{ repmgr_service }}"
+            state: started
+            enabled: true
+
+- name: Verify
+  ansible.builtin.import_playbook: _verify_topology.yml

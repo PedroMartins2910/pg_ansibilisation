@@ -1,0 +1,56 @@
+---
+# DESTRUCTIVE: wipes this node's data directory and re-clones it from the primary.
+- name: Safety checks
+  ansible.builtin.assert:
+    that:
+      - pg_current_primary != ''
+      - inventory_hostname != pg_current_primary
+      - inventory_hostname in groups['pg_data']
+    fail_msg: "Refusing to rebuild {{ inventory_hostname }} (current primary: {{ pg_current_primary | default('none', true) }})"
+
+- name: Re-check live state (facts may be stale)
+  ansible.builtin.command: "{{ psql_cmd }} -d postgres -c 'SELECT pg_is_in_recovery()'"
+  become: true
+  become_user: postgres
+  register: _live_recovery
+  changed_when: false
+  failed_when: false
+
+- name: Never rebuild a running primary
+  ansible.builtin.assert:
+    that: _live_recovery.rc != 0 or _live_recovery.stdout | trim == 't'
+    fail_msg: "{{ inventory_hostname }} is a running PRIMARY - refusing to wipe it"
+
+- name: Stop repmgrd
+  ansible.builtin.systemd:
+    name: "{{ repmgr_service }}"
+    state: stopped
+  failed_when: false
+
+- name: Stop PostgreSQL
+  ansible.builtin.systemd:
+    name: "{{ pg_service }}"
+    state: stopped
+  failed_when: false
+
+- name: Move the old data directory aside
+  ansible.builtin.command: "mv {{ pg_data_dir }} {{ pg_data_dir }}.old-{{ ansible_date_time.epoch }}"
+  args:
+    removes: "{{ pg_data_dir }}"
+  changed_when: true
+  when: repmgr_rebuild_keep_old_datadir | bool
+
+- name: Remove the old data directory
+  ansible.builtin.file:
+    path: "{{ pg_data_dir }}"
+    state: absent
+  when: not (repmgr_rebuild_keep_old_datadir | bool)
+
+- name: Clone from primary
+  ansible.builtin.include_tasks: clone.yml
+
+- name: Start repmgrd
+  ansible.builtin.systemd:
+    name: "{{ repmgr_service }}"
+    state: started
+    enabled: true

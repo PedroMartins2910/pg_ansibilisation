@@ -1,0 +1,18 @@
+---
+- name: Drop-in directory for {{ pg_service }}
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ pg_service }}.service.d"
+    state: directory
+    mode: "0755"
+
+- name: Pin PGDATA for {{ pg_service }}
+  ansible.builtin.template:
+    src: pgdata.conf.j2
+    dest: "/etc/systemd/system/{{ pg_service }}.service.d/pg-ops.conf"
+    mode: "0644"
+  register: _pg_dropin
+
+- name: Reload systemd after drop-in change
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _pg_dropin is changed

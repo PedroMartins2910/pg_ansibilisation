@@ -1,0 +1,43 @@
+---
+- name: postgres .ssh directory
+  ansible.builtin.file:
+    path: "{{ pg_home_dir }}/.ssh"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: Generate SSH key for postgres
+  ansible.builtin.command:
+    cmd: ssh-keygen -q -t ed25519 -N "" -C "postgres@{{ inventory_hostname }}" -f {{ pg_home_dir }}/.ssh/id_ed25519
+    creates: "{{ pg_home_dir }}/.ssh/id_ed25519"
+  become: true
+  become_user: postgres
+
+- name: SSH client defaults between cluster nodes (pgBackRest, event hook)
+  ansible.builtin.blockinfile:
+    path: "{{ pg_home_dir }}/.ssh/config"
+    create: true
+    owner: postgres
+    group: postgres
+    mode: "0600"
+    marker: "# {mark} pg-ops"
+    block: |
+      Host {{ groups['pg_cluster'] | map('extract', hostvars, 'pg_node_ip') | join(' ') }}
+        User postgres
+        BatchMode yes
+        StrictHostKeyChecking accept-new
+        ConnectTimeout 10
+        ServerAliveInterval 30
+
+- name: Read public key
+  ansible.builtin.slurp:
+    src: "{{ pg_home_dir }}/.ssh/id_ed25519.pub"
+  register: _repmgr_pubkey
+
+- name: Authorise every cluster node's key
+  ansible.posix.authorized_key:
+    user: postgres
+    key: "{{ hostvars[item]._repmgr_pubkey.content | b64decode }}"
+    state: present
+  loop: "{{ groups['pg_cluster'] | intersect(ansible_play_hosts) }}"

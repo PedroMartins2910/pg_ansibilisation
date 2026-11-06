@@ -1,0 +1,205 @@
+---
+# Runs on the current primary only.
+- name: Validate naming
+  ansible.builtin.assert:
+    that:
+      - pg_db_name is defined and pg_db_name | length > 0
+      - pg_role_ro_name is defined and pg_role_dml_name is defined and pg_role_ddl_name is defined
+      - "[pg_role_ro_name, pg_role_dml_name, pg_role_ddl_name] | unique | length == 3"
+      - pg_login_users | rejectattr('group', 'in', ['ro', 'dml', 'ddl']) | list | length == 0
+    fail_msg: "Set pg_db_name and three distinct pg_role_{ro,dml,ddl}_name; login user groups must be ro|dml|ddl"
+    quiet: true
+
+- name: Role map
+  ansible.builtin.set_fact:
+    _dbb_roles:
+      ro: "{{ pg_role_ro_name }}"
+      dml: "{{ pg_role_dml_name }}"
+      ddl: "{{ pg_role_ddl_name }}"
+
+- name: Database objects
+  become: true
+  become_user: postgres
+  block:
+    - name: Optional postgres superuser password
+      community.postgresql.postgresql_user:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        name: postgres
+        password: "{{ pg_postgres_password }}"
+      no_log: true
+      when: pg_manage_postgres_password | default(false) | bool
+
+    - name: Group roles (NOLOGIN)
+      community.postgresql.postgresql_user:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        name: "{{ item }}"
+        role_attr_flags: NOLOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,INHERIT
+      loop: "{{ [pg_role_ro_name, pg_role_dml_name, pg_role_ddl_name] }}"
+
+    - name: dml inherits ro
+      community.postgresql.postgresql_membership:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        groups: ["{{ pg_role_ro_name }}"]
+        target_roles: ["{{ pg_role_dml_name }}"]
+        state: present
+
+    - name: ddl inherits dml
+      community.postgresql.postgresql_membership:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        groups: ["{{ pg_role_dml_name }}"]
+        target_roles: ["{{ pg_role_ddl_name }}"]
+        state: present
+
+    - name: Database {{ pg_db_name }}
+      community.postgresql.postgresql_db:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        name: "{{ pg_db_name }}"
+        owner: "{{ pg_db_owner }}"
+        encoding: "{{ pg_db_encoding }}"
+
+    - name: Revoke everything on the database from PUBLIC
+      community.postgresql.postgresql_privs:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        type: database
+        objs: "{{ pg_db_name }}"
+        privs: ALL
+        roles: PUBLIC
+        state: absent
+
+    - name: CONNECT / TEMP for the ro group (inherited by dml and ddl)
+      community.postgresql.postgresql_privs:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        type: database
+        objs: "{{ pg_db_name }}"
+        privs: CONNECT,TEMPORARY
+        roles: "{{ pg_role_ro_name }}"
+
+    - name: Schema {{ pg_schema_name }} owned by the ddl group
+      community.postgresql.postgresql_schema:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        name: "{{ pg_schema_name }}"
+        owner: "{{ pg_role_ddl_name }}"
+
+    - name: No CREATE on schema public
+      community.postgresql.postgresql_privs:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        type: schema
+        objs: public
+        privs: CREATE
+        roles: PUBLIC
+        state: absent
+
+    - name: USAGE on the schema for ro
+      community.postgresql.postgresql_privs:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        type: schema
+        objs: "{{ pg_schema_name }}"
+        privs: USAGE
+        roles: "{{ pg_role_ro_name }}"
+
+    - name: Privileges on existing objects
+      community.postgresql.postgresql_privs:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        schema: "{{ pg_schema_name }}"
+        type: "{{ item.type }}"
+        objs: ALL_IN_SCHEMA
+        privs: "{{ item.privs }}"
+        roles: "{{ item.role }}"
+      loop:
+        - {type: table, privs: SELECT, role: "{{ pg_role_ro_name }}"}
+        - {type: sequence, privs: SELECT, role: "{{ pg_role_ro_name }}"}
+        - {type: table, privs: "INSERT,UPDATE,DELETE,TRUNCATE", role: "{{ pg_role_dml_name }}"}
+        - {type: sequence, privs: "USAGE,UPDATE", role: "{{ pg_role_dml_name }}"}
+        - {type: function, privs: EXECUTE, role: "{{ pg_role_dml_name }}"}
+
+    - name: Default privileges for objects created by the ddl group
+      community.postgresql.postgresql_privs:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        database: "{{ pg_db_name }}"
+        schema: "{{ pg_schema_name }}"
+        type: default_privs
+        target_roles: "{{ pg_role_ddl_name }}"
+        objs: "{{ item.objs }}"
+        privs: "{{ item.privs }}"
+        roles: "{{ item.role }}"
+      loop:
+        - {objs: TABLES, privs: SELECT, role: "{{ pg_role_ro_name }}"}
+        - {objs: SEQUENCES, privs: SELECT, role: "{{ pg_role_ro_name }}"}
+        - {objs: TABLES, privs: "INSERT,UPDATE,DELETE,TRUNCATE", role: "{{ pg_role_dml_name }}"}
+        - {objs: SEQUENCES, privs: "USAGE,UPDATE", role: "{{ pg_role_dml_name }}"}
+        - {objs: FUNCTIONS, privs: EXECUTE, role: "{{ pg_role_dml_name }}"}
+
+    - name: Login users
+      community.postgresql.postgresql_user:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        name: "{{ item.name }}"
+        password: "{{ pg_login_passwords[item.name] }}"
+        role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,INHERIT
+        conn_limit: "{{ item.conn_limit | default(omit) }}"
+        update_password: "{{ pg_login_update_password }}"
+      loop: "{{ pg_login_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Group membership of login users
+      community.postgresql.postgresql_membership:
+        port: "{{ pg_port }}"
+        login_unix_socket: "{{ pg_socket_dir }}"
+        groups: ["{{ _dbb_roles[item.group] }}"]
+        target_roles: ["{{ item.name }}"]
+        state: present
+      loop: "{{ pg_login_users }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ _dbb_roles[item.group] }}"
+
+    - name: Read per-database settings of login users
+      ansible.builtin.command: >-
+        {{ psql_cmd }} -d postgres -F '|' -c "SELECT r.rolname, coalesce(array_to_string(s.setconfig, ';'), '')
+          FROM pg_roles r
+          LEFT JOIN pg_db_role_setting s ON s.setrole = r.oid
+               AND s.setdatabase = (SELECT oid FROM pg_database WHERE datname = '{{ pg_db_name }}')
+          WHERE r.rolname IN ('{{ pg_login_users | map(attribute='name') | join("','") }}')"
+      register: _dbb_settings
+      changed_when: false
+
+    - name: Index current settings
+      ansible.builtin.set_fact:
+        _dbb_cfg: "{{ dict(_dbb_settings.stdout_lines | map('split', '|') | map('first') | zip(_dbb_settings.stdout_lines | map('split', '|') | map('last'))) }}"
+
+    - name: search_path = {{ pg_schema_name }} for login users
+      ansible.builtin.command: >-
+        {{ psql_cmd }} -d postgres -c "ALTER ROLE \"{{ item.name }}\" IN DATABASE \"{{ pg_db_name }}\" SET search_path = {{ pg_schema_name }}, public"
+      loop: "{{ pg_login_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: true
+      when: ('search_path=' ~ pg_schema_name ~ ', public') not in (_dbb_cfg[item.name] | default('')).split(';')
+
+    - name: ddl users always create objects as the ddl group (SET ROLE on login)
+      ansible.builtin.command: >-
+        {{ psql_cmd }} -d postgres -c "ALTER ROLE \"{{ item.name }}\" IN DATABASE \"{{ pg_db_name }}\" SET role = {{ pg_role_ddl_name }}"
+      loop: "{{ pg_login_users | selectattr('group', 'equalto', 'ddl') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: true
+      when: ('role=' ~ pg_role_ddl_name) not in (_dbb_cfg[item.name] | default('')).split(';')

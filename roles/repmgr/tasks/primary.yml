@@ -1,0 +1,13 @@
+---
+- name: repmgr database objects
+  ansible.builtin.include_tasks: repmgr_db.yml
+
+- name: Registration status
+  ansible.builtin.include_tasks: check_registration.yml
+
+- name: Register primary
+  ansible.builtin.command: "{{ repmgr_cmd }} primary register {{ '--force' if repmgr_force_register | bool else '' }}"
+  become: true
+  become_user: postgres
+  changed_when: true
+  when: not repmgr_registered or repmgr_force_register | bool

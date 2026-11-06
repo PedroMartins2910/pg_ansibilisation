@@ -1,0 +1,93 @@
+---
+# Discovers the REAL state of every node. Playbooks never trust the inventory
+# to know which node is the primary.
+#
+# Per-host facts:
+#   pg_node_role : uninitialized | stopped | primary | standby | witness
+#   pg_initialized, pg_running, pg_datadir_version, pg_server_version_num
+# Cluster facts (identical on every host):
+#   pg_current_primary  (inventory hostname or '')
+#   pg_current_standbys (list)
+
+- name: Check whether PostgreSQL {{ pg_version }} binaries are installed
+  ansible.builtin.stat:
+    path: "{{ pg_bin_dir }}/psql"
+  register: _pgf_psql
+
+- name: Check whether the data directory is initialised
+  ansible.builtin.stat:
+    path: "{{ pg_data_dir }}/PG_VERSION"
+  register: _pgf_pgversion
+
+- name: Read PG_VERSION of the data directory
+  ansible.builtin.slurp:
+    src: "{{ pg_data_dir }}/PG_VERSION"
+  register: _pgf_pgversion_content
+  when: _pgf_pgversion.stat.exists
+
+- name: Check whether the PostgreSQL service is active
+  ansible.builtin.command: systemctl is-active {{ pg_service }}
+  register: _pgf_active
+  changed_when: false
+  failed_when: false
+
+- name: Query recovery state and server version
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d postgres
+    -c "SELECT pg_is_in_recovery()::text || '|' || current_setting('server_version_num')"
+  become: true
+  become_user: postgres
+  register: _pgf_recovery
+  changed_when: false
+  failed_when: false
+  when:
+    - _pgf_psql.stat.exists
+    - _pgf_active.stdout == 'active'
+
+- name: Determine node role
+  ansible.builtin.set_fact:
+    pg_initialized: "{{ _pgf_pgversion.stat.exists }}"
+    pg_running: "{{ (_pgf_recovery.rc | default(1)) == 0 }}"
+    pg_datadir_version: "{{ (_pgf_pgversion_content.content | b64decode | trim) if _pgf_pgversion.stat.exists else '' }}"
+    pg_server_version_num: "{{ _pgf_recovery.stdout.split('|')[1] if (_pgf_recovery.rc | default(1)) == 0 else '' }}"
+    pg_node_role: >-
+      {%- if not _pgf_pgversion.stat.exists -%}uninitialized
+      {%- elif (_pgf_recovery.rc | default(1)) != 0 -%}stopped
+      {%- elif inventory_hostname in (groups['pg_witness'] | default([])) -%}witness
+      {%- elif _pgf_recovery.stdout.split('|')[0] == 'false' -%}primary
+      {%- else -%}standby
+      {%- endif -%}
+
+- name: Compute cluster topology from all nodes
+  ansible.builtin.set_fact:
+    pg_current_primaries: >-
+      {{ groups['pg_data'] | map('extract', hostvars) | selectattr('pg_node_role', 'defined')
+         | selectattr('pg_node_role', 'equalto', 'primary') | map(attribute='inventory_hostname') | list }}
+    pg_current_standbys: >-
+      {{ groups['pg_data'] | map('extract', hostvars) | selectattr('pg_node_role', 'defined')
+         | selectattr('pg_node_role', 'equalto', 'standby') | map(attribute='inventory_hostname') | list }}
+
+- name: Set current primary
+  ansible.builtin.set_fact:
+    pg_current_primary: "{{ pg_current_primaries | first | default('') }}"
+
+- name: Refuse to continue on split-brain
+  ansible.builtin.assert:
+    that: pg_current_primaries | length <= 1
+    fail_msg: >-
+      SPLIT-BRAIN: more than one data node is a writable primary: {{ pg_current_primaries }}.
+      Fence the stale one manually (stop + mask its postgresql unit) and run rejoin.yml.
+    quiet: true
+  run_once: true
+  when: not pg_facts_allow_multiple_primaries
+
+- name: Warn if the data directory version differs from pg_version
+  ansible.builtin.debug:
+    msg: "WARNING: {{ pg_data_dir }} is version {{ pg_datadir_version }} but pg_version={{ pg_version }}"
+  when:
+    - pg_datadir_version != ''
+    - pg_datadir_version != (pg_version | string)
+
+- name: Topology
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: role={{ pg_node_role }} version={{ pg_server_version_num | default('-', true) }} primary={{ pg_current_primary | default('-', true) }}"

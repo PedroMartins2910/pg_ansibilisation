@@ -1,0 +1,83 @@
+---
+# PITR of THIS node with pgBackRest. PostgreSQL must be stopped.
+# Vars:
+#   restore_target_time  optional, e.g. "2026-11-05 10:30:00+01" (default: replay all WAL)
+#   restore_set          optional backup label (default: pgBackRest picks the right one)
+#   restore_move_aside   true = keep the current data dir as <dir>.pre-restore-<ts> (needs space)
+#                        false (default) = --delta restore in place (fast)
+- name: PostgreSQL must be stopped
+  ansible.builtin.command: systemctl is-active {{ pg_service }}
+  register: _rs_active
+  changed_when: false
+  failed_when: _rs_active.stdout == 'active'
+
+- name: Keep the current data directory aside
+  when: restore_move_aside | default(false) | bool
+  block:
+    - name: Move data directory
+      ansible.builtin.command: "mv {{ pg_data_dir }} {{ pg_data_dir }}.pre-restore-{{ ansible_date_time.epoch }}"
+      args:
+        removes: "{{ pg_data_dir }}"
+      changed_when: true
+    - name: Empty data directory
+      ansible.builtin.file:
+        path: "{{ pg_data_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0700"
+
+- name: pgbackrest restore
+  ansible.builtin.command: >-
+    pgbackrest --stanza={{ pgbackrest_stanza }} --delta
+    {{ ('--set=' ~ restore_set) if restore_set | default('') | length > 0 else '' }}
+    {% if restore_target_time | default('') | length > 0 %}
+    --type=time "--target={{ restore_target_time }}" --target-action=promote
+    {% else %}
+    --type=default
+    {% endif %}
+    restore
+  become: true
+  become_user: postgres
+  async: 86400
+  poll: 30
+  changed_when: true
+
+- name: Remove standby leftovers
+  ansible.builtin.file:
+    path: "{{ pg_data_dir }}/standby.signal"
+    state: absent
+
+- name: Remove replication settings written by repmgr
+  ansible.builtin.lineinfile:
+    path: "{{ pg_data_dir }}/postgresql.auto.conf"
+    regexp: '^\s*(primary_conninfo|primary_slot_name)\s*='
+    state: absent
+
+- name: Start PostgreSQL in recovery
+  ansible.builtin.command: "systemctl start --no-block {{ pg_service }}"
+  changed_when: true
+
+- name: Unmask/enable PostgreSQL
+  ansible.builtin.systemd:
+    name: "{{ pg_service }}"
+    enabled: true
+    masked: false
+
+- name: Wait for recovery to finish and promote
+  ansible.builtin.command: "{{ psql_cmd }} -d postgres -c 'SELECT pg_is_in_recovery()'"
+  become: true
+  become_user: postgres
+  register: _rs_state
+  until: _rs_state.stdout | default('') | trim == 'f'
+  retries: "{{ restore_wait_retries | default(1440) }}"
+  delay: 10
+  changed_when: false
+  failed_when: false
+
+- name: Recovery did not complete
+  ansible.builtin.fail:
+    msg: >-
+      Recovery did not finish. Check {{ pg_data_dir }}/log and {{ pgbackrest_log_dir }}
+      (a target time after the last archived WAL makes PostgreSQL stop with FATAL).
+  when: _rs_state.stdout | default('') | trim != 'f'

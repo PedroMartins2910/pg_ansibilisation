@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Included from postgresql.conf via include_dir = 'conf.d'.
+{% set s = pg_settings_base
+           | combine(pg_settings_logging)
+           | combine({'shared_preload_libraries': pg_shared_preload_libraries | join(',')})
+           | combine(pg_settings_extra) %}
+{% if inventory_hostname in (groups['pg_witness'] | default([])) %}
+{%   set s = s | combine(pg_settings_witness) %}
+{% endif %}
+{% for k in s | sort %}
+{{ k }} = '{{ s[k] | string | replace("'", "''") }}'
+{% endfor %}

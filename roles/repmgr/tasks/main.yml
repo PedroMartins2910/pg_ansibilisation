@@ -1,0 +1,67 @@
+---
+# Common repmgr setup for every node (data nodes + witness).
+- name: Validate host variables
+  ansible.builtin.assert:
+    that:
+      - repmgr_node_id is defined
+      - repmgr_node_id | int > 0
+      - groups['pg_cluster'] | map('extract', hostvars, 'repmgr_node_id') | unique | length == groups['pg_cluster'] | length
+    fail_msg: "Every host needs a unique integer repmgr_node_id in the inventory"
+    quiet: true
+
+- name: Install repmgr packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: repmgr log directory
+  ansible.builtin.file:
+    path: "{{ repmgr_log_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0750"
+
+- name: repmgr.conf
+  ansible.builtin.template:
+    src: repmgr.conf.j2
+    dest: "{{ repmgr_conf_path }}"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Restart repmgrd
+
+- name: logrotate for repmgrd
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/repmgr-pgops
+    mode: "0644"
+    content: |
+      {{ repmgr_log_dir }}/*.log {
+          daily
+          rotate 14
+          compress
+          missingok
+          notifempty
+          copytruncate
+      }
+
+- name: sudo rules for postgres (service control and VIP)
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: /etc/sudoers.d/pg-ops-postgres
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: .pgpass entries for the repmgr user
+  ansible.builtin.blockinfile:
+    path: "{{ pg_home_dir }}/.pgpass"
+    create: true
+    owner: postgres
+    group: postgres
+    mode: "0600"
+    marker: "# {mark} pg-ops repmgr"
+    block: |
+      *:*:{{ repmgr_db }}:{{ repmgr_user }}:{{ repmgr_password | replace('\\', '\\\\') | replace(':', '\\:') }}
+      *:*:replication:{{ repmgr_user }}:{{ repmgr_password | replace('\\', '\\\\') | replace(':', '\\:') }}
+  no_log: true
+
+- name: SSH trust between cluster nodes (postgres user)
+  ansible.builtin.import_tasks: ssh.yml

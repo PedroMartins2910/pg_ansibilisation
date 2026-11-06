@@ -1,0 +1,41 @@
+---
+# Planned primary election (no data loss, a few seconds of reconnect for clients).
+#   ansible-playbook ... playbooks/switchover.yml -e new_primary=<standby host> -e confirm=YES
+- name: Discover and validate
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: Validate request
+      ansible.builtin.assert:
+        that:
+          - new_primary is defined
+          - new_primary in groups['pg_data']
+          - pg_current_primary != ''
+          - new_primary != pg_current_primary
+          - hostvars[new_primary].pg_node_role == 'standby'
+          - confirm | default('') == 'YES'
+        fail_msg: "Usage: -e new_primary=<running standby> -e confirm=YES"
+      run_once: true
+
+    - name: Remember the old primary
+      ansible.builtin.set_fact:
+        old_primary: "{{ pg_current_primary }}"
+
+- name: Switchover
+  hosts: "{{ new_primary | default('no_target_given') }}"
+  become: true
+  tasks:
+    - name: Cluster before
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: cluster_show.yml
+    - name: Switchover
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: switchover.yml
+
+- name: Verify
+  ansible.builtin.import_playbook: _verify_topology.yml

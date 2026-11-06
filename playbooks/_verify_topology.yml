@@ -1,0 +1,31 @@
+---
+# Shared post-change verification: facts, VIP owner, standbys streaming.
+- name: Verify topology
+  hosts: pg_cluster
+  become: true
+  gather_facts: false
+  roles:
+    - pg_facts
+  tasks:
+    - name: VIP must be on the primary only
+      ansible.builtin.command: /usr/local/sbin/vip_ctl.sh status
+      register: _vip
+      until: _vip.stdout == ('up' if inventory_hostname == pg_current_primary else 'down')
+      retries: 20
+      delay: 3
+      changed_when: false
+      when:
+        - vip_enabled | bool
+        - inventory_hostname in groups['pg_data']
+
+    - name: Standbys must be streaming
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: wait_streaming.yml
+      when: pg_node_role == 'standby'
+
+    - name: Cluster
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: cluster_show.yml
+      when: inventory_hostname == pg_current_primary

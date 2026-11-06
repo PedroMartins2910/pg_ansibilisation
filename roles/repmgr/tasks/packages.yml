@@ -1,0 +1,5 @@
+---
+- name: Install repmgr for PostgreSQL {{ pg_version }}
+  ansible.builtin.dnf:
+    name: "{{ repmgr_packages }}"
+    state: present

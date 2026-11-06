@@ -1,0 +1,52 @@
+# {{ ansible_managed }}
+[global]
+repo1-type=s3
+repo1-path={{ pgbackrest_repo_path }}
+repo1-s3-endpoint={{ pgbackrest_s3_endpoint }}
+repo1-s3-port={{ pgbackrest_s3_port }}
+repo1-s3-bucket={{ pgbackrest_s3_bucket }}
+repo1-s3-region={{ pgbackrest_s3_region }}
+repo1-s3-uri-style={{ pgbackrest_s3_uri_style }}
+repo1-s3-verify-tls={{ 'y' if pgbackrest_s3_verify_tls | bool else 'n' }}
+{% if pgbackrest_s3_ca_cert_src | length > 0 %}
+repo1-s3-ca-file={{ pgbackrest_s3_ca_file }}
+{% endif %}
+repo1-s3-key={{ pgbackrest_s3_key }}
+repo1-s3-key-secret={{ pgbackrest_s3_key_secret }}
+repo1-retention-full-type=count
+repo1-retention-full={{ pgbackrest_retention_full }}
+{% if pgbackrest_encrypt | bool %}
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass={{ pgbackrest_cipher_pass }}
+{% endif %}
+
+process-max={{ pgbackrest_process_max }}
+compress-type={{ pgbackrest_compress_type }}
+compress-level={{ pgbackrest_compress_level }}
+start-fast=y
+delta=y
+backup-standby=y
+{% if pgbackrest_archive_async | bool %}
+archive-async=y
+spool-path={{ pgbackrest_spool_dir }}
+{% endif %}
+{% if pgbackrest_archive_push_queue_max | length > 0 %}
+archive-push-queue-max={{ pgbackrest_archive_push_queue_max }}
+{% endif %}
+log-path={{ pgbackrest_log_dir }}
+log-level-console=info
+log-level-file=detail
+
+[{{ pgbackrest_stanza }}]
+pg1-path={{ pg_data_dir }}
+pg1-port={{ pg_port }}
+pg1-socket-path={{ pg_socket_dir }}
+{% if not (pgbackrest_single_host | default(false) | bool) %}
+{%   for peer in groups['pg_data'] | difference([inventory_hostname]) %}
+pg{{ loop.index + 1 }}-host={{ hostvars[peer].pg_node_ip }}
+pg{{ loop.index + 1 }}-host-user=postgres
+pg{{ loop.index + 1 }}-path={{ pg_data_dir }}
+pg{{ loop.index + 1 }}-port={{ pg_port }}
+pg{{ loop.index + 1 }}-socket-path={{ pg_socket_dir }}
+{%   endfor %}
+{% endif %}

@@ -1,0 +1,13 @@
+---
+pgbadger_enabled: true
+pgbadger_packages: [pgbadger]
+# PLACEHOLDER until the in-house pgBadger/Dynatrace script is provided:
+# point this to your script (absolute path or path relative to the playbook) - it is
+# rendered as a Jinja template, so it can use pg-ops variables.
+pgbadger_script_src: pgbadger_report.sh.j2
+pgbadger_script_dest: /usr/local/bin/pgbadger_report.sh
+pgbadger_output_dir: /var/lib/pg-ops/pgbadger
+pgbadger_retention_weeks: 4
+pgbadger_cron_minute: "15"
+pgbadger_cron_hour: "0"
+pgbadger_extra_args: ""

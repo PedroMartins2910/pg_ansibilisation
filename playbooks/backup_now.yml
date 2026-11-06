@@ -1,0 +1,41 @@
+---
+# On-demand pgBackRest backup (runs on the standby; the primary skips).
+#   ... playbooks/backup_now.yml                          # full backup from the standby
+#   ... playbooks/backup_now.yml -e backup_now_type=diff  # full | diff | incr
+#   ... playbooks/backup_now.yml -e force_on=<host>       # force on that node (even the primary)
+- name: Backup now
+  hosts: pg_data
+  become: true
+  gather_facts: false
+  tasks:
+    - name: pg_backup.sh
+      ansible.builtin.command: >-
+        /usr/local/bin/pg_backup.sh --type={{ backup_now_type | default('full') }}
+        {{ '--force' if force_on | default('') == inventory_hostname else '' }}
+      become: true
+      become_user: postgres
+      register: _bb
+      async: 86400
+      poll: 30
+      changed_when: _bb.stdout | length > 0
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ _bb.stdout | default('skipped (not a standby)', true) }}"
+
+- name: Repository
+  hosts: pg_data
+  become: true
+  gather_facts: false
+  tasks:
+    - name: pgbackrest info
+      ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} info"
+      become: true
+      become_user: postgres
+      register: _info
+      changed_when: false
+      run_once: true
+    - name: Backups in S3
+      ansible.builtin.debug:
+        var: _info.stdout_lines
+      run_once: true

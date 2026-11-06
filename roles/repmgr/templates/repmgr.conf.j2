@@ -1,0 +1,39 @@
+# {{ ansible_managed }}
+node_id={{ repmgr_node_id | int }}
+node_name='{{ repmgr_node_name }}'
+conninfo='host={{ pg_node_ip }} port={{ pg_port }} user={{ repmgr_user }} dbname={{ repmgr_db }} connect_timeout=2'
+data_directory='{{ pg_data_dir }}'
+pg_bindir='{{ pg_bin_dir }}'
+location='{{ repmgr_location }}'
+priority={{ repmgr_priority | int }}
+
+use_replication_slots=yes
+log_level=INFO
+log_file='{{ repmgr_log_dir }}/repmgrd.log'
+
+# Automatic failover (repmgrd)
+failover={{ repmgr_failover }}
+promote_command='{{ repmgr_bin }} standby promote -f {{ repmgr_conf_path }} --siblings-follow --log-to-file'
+follow_command='{{ repmgr_bin }} standby follow -f {{ repmgr_conf_path }} --log-to-file --upstream-node-id=%n'
+reconnect_attempts={{ repmgr_reconnect_attempts }}
+reconnect_interval={{ repmgr_reconnect_interval }}
+monitor_interval_secs={{ repmgr_monitor_interval_secs }}
+primary_visibility_consensus=true
+standby_disconnect_on_failover=true
+connection_check_type=ping
+
+# Service control (sudo rules in /etc/sudoers.d/pg-ops-postgres)
+service_start_command='sudo -n /usr/bin/systemctl start {{ pg_service }}'
+service_stop_command='sudo -n /usr/bin/systemctl stop {{ pg_service }}'
+service_restart_command='sudo -n /usr/bin/systemctl restart {{ pg_service }}'
+service_reload_command='sudo -n /usr/bin/systemctl reload {{ pg_service }}'
+repmgrd_service_start_command='sudo -n /usr/bin/systemctl start {{ repmgr_service }}'
+repmgrd_service_stop_command='sudo -n /usr/bin/systemctl stop {{ repmgr_service }}'
+
+ssh_options='{{ repmgr_ssh_options }}'
+
+{% if inventory_hostname in groups['pg_data'] %}
+# VIP handling (see roles/vip)
+event_notification_command='{{ repmgr_event_hook }} %n %e %s "%t" "%d"'
+event_notifications='standby_promote,repmgrd_failover_promote,standby_switchover,standby_follow,repmgrd_failover_follow,node_rejoin'
+{% endif %}

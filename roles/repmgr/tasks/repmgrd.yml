@@ -1,0 +1,7 @@
+---
+- name: Enable and start repmgrd
+  ansible.builtin.systemd:
+    name: "{{ repmgr_service }}"
+    state: started
+    enabled: true
+  when: pg_node_role in ['primary', 'standby', 'witness']

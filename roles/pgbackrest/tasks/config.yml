@@ -1,0 +1,16 @@
+---
+- name: Private CA for the S3 endpoint
+  ansible.builtin.copy:
+    src: "{{ pgbackrest_s3_ca_cert_src }}"
+    dest: "{{ pgbackrest_s3_ca_file }}"
+    mode: "0644"
+  when: pgbackrest_s3_ca_cert_src | length > 0
+
+- name: pgbackrest.conf
+  ansible.builtin.template:
+    src: pgbackrest.conf.j2
+    dest: "{{ pgbackrest_conf }}"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  diff: false        # contains S3 keys / cipher pass

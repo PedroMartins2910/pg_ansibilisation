@@ -1,0 +1,14 @@
+local   all             postgres                                peer
+local   replication     postgres                                peer
+{% for h in groups['pg_cluster'] %}
+host    {{ repmgr_db }}          {{ repmgr_user }}          {{ hostvars[h].pg_node_ip }}/32    {{ pg_hba_auth_method }}
+host    replication     {{ repmgr_user }}          {{ hostvars[h].pg_node_ip }}/32    {{ pg_hba_auth_method }}
+{% endfor %}
+{% for line in pg_hba_extra_entries %}
+{{ line }}
+{% endfor %}
+{% if pg_db_name is defined %}
+{% for cidr in pg_hba_app_cidrs %}
+host    {{ pg_db_name }}    all    {{ cidr }}    {{ pg_hba_auth_method }}
+{% endfor %}
+{% endif %}

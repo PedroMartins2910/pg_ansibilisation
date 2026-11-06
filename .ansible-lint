@@ -1,0 +1,8 @@
+---
+profile: moderate
+skip_list:
+  - var-naming[no-role-prefix]    # shared pg_*/repmgr_* variables are used across roles on purpose
+  - name[casing]                  # task names start with tool names (repmgr, pg_upgrade, ...)
+  - name[template]
+  - command-instead-of-module     # systemctl is-active / try-restart / --no-block on purpose
+  - yaml[line-length]

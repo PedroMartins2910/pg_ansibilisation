@@ -1,0 +1,18 @@
+---
+# Database <pg_db_name>, schema <pg_db_name>, group roles ro/dml/ddl, login users.
+- name: Discover cluster state and load secrets
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+    - secrets
+
+- name: Bootstrap application database on the primary
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Database, schema, roles, users
+      ansible.builtin.include_role:
+        name: db_bootstrap
+      when: inventory_hostname == pg_current_primary

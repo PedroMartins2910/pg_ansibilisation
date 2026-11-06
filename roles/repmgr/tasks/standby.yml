@@ -1,0 +1,41 @@
+---
+- name: Stopped standby - leaving it alone
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} is stopped. Use rejoin.yml (old primary) or rebuild_replica.yml."
+  when: pg_node_role == 'stopped'
+
+- name: Bootstrap a new standby (empty data directory)
+  when: pg_node_role == 'uninitialized'
+  block:
+    - name: A primary is required to clone from
+      ansible.builtin.assert:
+        that: pg_current_primary != ''
+        fail_msg: "No running primary found - cannot clone {{ inventory_hostname }}"
+
+    - name: Look for leftover files in the data directory
+      ansible.builtin.find:
+        paths: "{{ pg_data_dir }}"
+        hidden: true
+        file_type: any
+      register: _standby_leftovers
+
+    - name: Refuse to clone over a non-empty data directory
+      ansible.builtin.fail:
+        msg: "{{ pg_data_dir }} is not empty but has no PG_VERSION. Inspect it, or use rebuild_replica.yml."
+      when: _standby_leftovers.matched | int > 0
+
+    - name: Clone and register
+      ansible.builtin.include_tasks: clone.yml
+
+- name: Register an existing running standby if needed
+  when: pg_node_role == 'standby'
+  block:
+    - name: Registration status
+      ansible.builtin.include_tasks: check_registration.yml
+
+    - name: Register standby
+      ansible.builtin.command: "{{ repmgr_cmd }} standby register {{ '--force' if repmgr_force_register | bool else '' }}"
+      become: true
+      become_user: postgres
+      changed_when: true
+      when: not repmgr_registered or repmgr_force_register | bool

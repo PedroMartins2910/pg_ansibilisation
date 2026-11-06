@@ -1,0 +1,60 @@
+---
+- name: Configure PostgreSQL package repositories
+  when: pg_repo_manage
+  block:
+    - name: Import PGDG GPG key
+      ansible.builtin.rpm_key:
+        key: "{{ pg_repo_gpg_key_url }}"
+        state: present
+      when: pg_repo_gpgcheck
+
+    - name: PGDG repository per PostgreSQL version
+      ansible.builtin.yum_repository:
+        name: "pgdg{{ item }}"
+        description: "PostgreSQL {{ item }} (PGDG)"
+        baseurl: "{{ pg_repo_base_url }}/{{ item }}/{{ pg_repo_arch_path }}"
+        gpgcheck: "{{ pg_repo_gpgcheck }}"
+        gpgkey: "{{ pg_repo_gpg_key_url if pg_repo_gpgcheck else omit }}"
+        repo_gpgcheck: false
+        enabled: true
+      loop: "{{ pg_repo_versions | map('string') | unique | list }}"
+
+    - name: PGDG common repository
+      ansible.builtin.yum_repository:
+        name: pgdg-common
+        description: "PostgreSQL common (PGDG)"
+        baseurl: "{{ pg_repo_base_url }}/common/{{ pg_repo_arch_path }}"
+        gpgcheck: "{{ pg_repo_gpgcheck }}"
+        gpgkey: "{{ pg_repo_gpg_key_url if pg_repo_gpgcheck else omit }}"
+        enabled: true
+      when: pg_repo_common_enabled
+
+    - name: Check whether the AppStream postgresql module is disabled
+      ansible.builtin.command: dnf -q module list --disabled postgresql
+      register: _pgrepo_module
+      changed_when: false
+      failed_when: false
+      when: ansible_distribution_major_version | int in [8, 9]
+
+    - name: Disable the AppStream postgresql module (it shadows PGDG packages)
+      ansible.builtin.command: dnf -qy module disable postgresql
+      changed_when: true
+      when:
+        - ansible_distribution_major_version | int in [8, 9]
+        - _pgrepo_module.rc != 0 or 'postgresql' not in _pgrepo_module.stdout
+
+    - name: Import EPEL GPG key
+      ansible.builtin.rpm_key:
+        key: "{{ pg_repo_epel_gpg_key_url }}"
+        state: present
+      when: pg_repo_epel_manage
+
+    - name: EPEL repository
+      ansible.builtin.yum_repository:
+        name: epel
+        description: "Extra Packages for Enterprise Linux"
+        baseurl: "{{ pg_repo_epel_baseurl }}"
+        gpgcheck: true
+        gpgkey: "{{ pg_repo_epel_gpg_key_url }}"
+        enabled: true
+      when: pg_repo_epel_manage

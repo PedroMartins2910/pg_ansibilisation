@@ -1,0 +1,96 @@
+---
+# LAB ONLY: MinIO (S3-compatible, self-signed TLS) on the witness as the pgBackRest repo.
+- name: MinIO S3 for the lab
+  hosts: pg_witness
+  become: true
+  vars:
+    minio_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    minio_ip: "{{ pgbackrest_s3_endpoint }}"
+  tasks:
+    - name: minio user
+      ansible.builtin.user:
+        name: minio
+        system: true
+        home: /srv/minio
+        shell: /sbin/nologin
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: minio
+        group: minio
+        mode: "0750"
+      loop: [/srv/minio/data, /etc/minio/certs]
+
+    - name: MinIO and mc binaries
+      ansible.builtin.get_url:
+        url: "https://dl.min.io/{{ item.kind }}/{{ item.name }}/release/linux-{{ minio_arch }}/{{ item.name }}"
+        dest: "/usr/local/bin/{{ item.name }}"
+        mode: "0755"
+      loop:
+        - {kind: server, name: minio}
+        - {kind: client, name: mc}
+
+    - name: Self-signed certificate
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN={{ minio_ip }}"
+          -addext "subjectAltName=IP:{{ minio_ip }}"
+          -keyout /etc/minio/certs/private.key -out /etc/minio/certs/public.crt
+        creates: /etc/minio/certs/public.crt
+
+    - name: Certificate ownership
+      ansible.builtin.file:
+        path: "/etc/minio/certs/{{ item }}"
+        owner: minio
+        group: minio
+        mode: "0600"
+      loop: [private.key, public.crt]
+
+    - name: MinIO service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/minio.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=MinIO (lab S3)
+          After=network-online.target
+          [Service]
+          User=minio
+          Group=minio
+          Environment=MINIO_ROOT_USER={{ minio_root_user }}
+          Environment=MINIO_ROOT_PASSWORD={{ minio_root_password }}
+          ExecStart=/usr/local/bin/minio server /srv/minio/data --address :{{ pgbackrest_s3_port }} --console-address :9001 --certs-dir /etc/minio/certs
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start MinIO
+      ansible.builtin.systemd:
+        name: minio
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Wait for MinIO
+      ansible.builtin.wait_for:
+        port: "{{ pgbackrest_s3_port }}"
+        timeout: 60
+
+    - name: Create bucket
+      ansible.builtin.shell: >-
+        mc --insecure alias set lab https://{{ minio_ip }}:{{ pgbackrest_s3_port }} {{ minio_root_user }} {{ minio_root_password }} &&
+        mc --insecure mb --ignore-existing lab/{{ pgbackrest_s3_bucket }}
+      changed_when: false
+
+- name: Lab networking
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Disable firewalld (lab only - open PostgreSQL, SSH and MinIO between VMs)
+      ansible.builtin.systemd:
+        name: firewalld
+        state: stopped
+        enabled: false
+      failed_when: false

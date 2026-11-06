@@ -1,0 +1,17 @@
+---
+# REQUIRED in the inventory:
+#   pg_db_name        - application database; the schema has the same name
+#   pg_role_ro_name   - read-only group role
+#   pg_role_dml_name  - read/write group role (inherits ro)
+#   pg_role_ddl_name  - schema owner group role (inherits dml)
+pg_schema_name: "{{ pg_db_name }}"
+pg_db_owner: postgres
+pg_db_encoding: UTF8
+
+# Login users (passwords from HashiCorp Vault, see roles/secrets):
+# pg_login_users:
+#   - name: billing_app
+#     group: dml                 # ro | dml | ddl
+#     conn_limit: 200            # optional
+#     vault_path: postgres/billing/users/billing_app   # optional, default <users_path>/<name>
+pg_login_update_password: always   # Vault is the source of truth: rotate there, re-run

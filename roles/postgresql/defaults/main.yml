@@ -1,0 +1,71 @@
+---
+pg_packages:
+  - "postgresql{{ pg_version }}"
+  - "postgresql{{ pg_version }}-server"
+  - "postgresql{{ pg_version }}-contrib"
+pg_extra_packages: []                 # e.g. ["pg_partman_{{ pg_version }}"] - rendered per version
+pg_support_packages: [python3-psycopg2, tar, gzip]
+
+# Only used for a brand-new cluster (never on an existing data directory)
+pg_initdb_options: "--data-checksums --encoding=UTF8 --locale=en_US.UTF-8 --auth-local=peer --auth-host=scram-sha-256"
+# Set to true on exactly ONE pg_data host for a greenfield bootstrap
+pg_initial_primary: false
+
+# Never start a node that was found stopped (it may be a fenced old primary).
+pg_start_stopped_nodes: false
+
+pg_archive_mode: "on"                 # "always" also archives on standbys (double push)
+pg_shared_preload_libraries: [repmgr, pg_stat_statements]
+
+# conf.d/00-ansible.conf is included at the END of postgresql.conf, so it wins over
+# postgresql.conf (not over postgresql.auto.conf / ALTER SYSTEM).
+pg_settings_base:
+  listen_addresses: "*"
+  port: "{{ pg_port }}"
+  password_encryption: scram-sha-256
+  wal_level: replica
+  wal_log_hints: "on"                 # required by pg_rewind (repmgr node rejoin)
+  max_wal_senders: 10
+  max_replication_slots: 10
+  wal_keep_size: 2GB
+  hot_standby: "on"
+  hot_standby_feedback: "on"
+  archive_mode: "{{ pg_archive_mode }}"
+  archive_command: "pgbackrest --stanza={{ pgbackrest_stanza }} archive-push %p"
+  # used by standbys to catch up from the S3 archive (ignored on the primary)
+  restore_command: "pgbackrest --stanza={{ pgbackrest_stanza }} archive-get %f \"%p\""
+  archive_timeout: 300                # max RPO for idle periods (seconds)
+
+# Logging format readable by pgBadger AND Dynatrace log ingestion
+pg_settings_logging:
+  logging_collector: "on"
+  log_destination: stderr
+  log_directory: log
+  log_filename: "postgresql-%a.log"
+  log_truncate_on_rotation: "on"
+  log_rotation_age: 1d
+  log_rotation_size: 0
+  log_line_prefix: "{{ pg_log_line_prefix }}"
+  log_checkpoints: "on"
+  log_connections: "on"
+  log_disconnections: "on"
+  log_lock_waits: "on"
+  log_temp_files: 0
+  log_autovacuum_min_duration: 0
+  log_min_duration_statement: 1000
+  log_error_verbosity: default
+  lc_messages: C
+  track_io_timing: "on"
+
+# Your tuning (shared_buffers, work_mem, ...) goes here
+pg_settings_extra: {}
+
+pg_settings_witness:
+  archive_mode: "off"
+  archive_command: ""
+  restore_command: ""
+
+# pg_hba managed block (inserted at the TOP of pg_hba.conf, first match wins)
+pg_hba_auth_method: scram-sha-256     # use md5 if existing passwords are still md5-hashed
+pg_hba_app_cidrs: []                  # e.g. ["10.20.0.0/16"] -> host <db> all <cidr>
+pg_hba_extra_entries: []              # raw pg_hba lines

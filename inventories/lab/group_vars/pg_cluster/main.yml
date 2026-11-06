@@ -1,0 +1,41 @@
+---
+pg_cluster_name: lab
+pg_version: 16
+pg_node_ip: "{{ ansible_host }}"
+vip_address: 192.168.56.10
+vip_interface: eth1
+
+pg_db_name: labdb
+pg_role_ro_name: labdb_ro
+pg_role_dml_name: labdb_dml
+pg_role_ddl_name: labdb_ddl
+pg_login_users:
+  - {name: lab_app, group: dml}
+  - {name: lab_read, group: ro}
+  - {name: lab_owner, group: ddl}
+pg_hba_app_cidrs: [192.168.56.0/24]
+
+pg_settings_extra:
+  shared_buffers: 128MB
+
+# Lab only: static secrets instead of HashiCorp Vault
+secrets_backend: vars
+pg_secrets_static:
+  repmgr_password: "lab-repmgr-pw"
+  users:
+    lab_app: "lab-app-pw"
+    lab_read: "lab-read-pw"
+    lab_owner: "lab-owner-pw"
+  pgbackrest_s3_access_key: labminio
+  pgbackrest_s3_secret_key: labminio-secret
+
+# Lab only: MinIO on the witness (playbooks/lab_prepare.yml), self-signed TLS
+pgbackrest_s3_endpoint: 192.168.56.13
+pgbackrest_s3_port: 9000
+pgbackrest_s3_bucket: pgbackrest
+pgbackrest_s3_region: us-east-1
+pgbackrest_s3_verify_tls: false
+pgbackrest_retention_full: 3
+pgbackrest_process_max: 2
+minio_root_user: labminio
+minio_root_password: labminio-secret

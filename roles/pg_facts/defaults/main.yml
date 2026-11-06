@@ -1,0 +1,2 @@
+---
+pg_facts_allow_multiple_primaries: false

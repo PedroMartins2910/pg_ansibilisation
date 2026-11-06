@@ -1,0 +1,111 @@
+---
+# Point-in-time restore with pgBackRest (S3) onto <target>, which becomes the primary;
+# the other data node is re-cloned and the witness re-registered.
+#   ... playbooks/restore_pitr.yml -e target=<host> [-e "restore_target_time='2026-11-05 10:30:00+01'"]
+#       [-e restore_set=<backup label>] [-e restore_move_aside=true] -e confirm=YES
+# Without restore_target_time all archived WAL is replayed (latest point).
+# pgBackRest picks the right backup for the target time unless restore_set is given.
+# Default is an in-place --delta restore; restore_move_aside=true keeps the old data dir.
+- name: Discover and validate
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  ignore_unreachable: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: Validate
+      ansible.builtin.assert:
+        that:
+          - target is defined
+          - target in groups['pg_data']
+          - confirm | default('') == 'YES'
+        fail_msg: "Usage: -e target=<data node> [-e restore_target_time=...] [-e restore_set=<label>] -e confirm=YES"
+      run_once: true
+
+- name: Stop the whole cluster
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Pause backups
+      ansible.builtin.file:
+        path: "{{ pgops_maintenance_flag }}"
+        state: touch
+        mode: "0644"
+    - name: Stop repmgrd
+      ansible.builtin.systemd:
+        name: "{{ repmgr_service }}"
+        state: stopped
+      failed_when: false
+    - name: Stop PostgreSQL on data nodes
+      ansible.builtin.systemd:
+        name: "{{ pg_service }}"
+        state: stopped
+      when: inventory_hostname in groups['pg_data']
+
+- name: Restore target
+  hosts: "{{ target | default('no_target_given') }}"
+  become: true
+  tasks:
+    - name: PITR
+      ansible.builtin.include_role:
+        name: pgbackrest
+        tasks_from: restore.yml
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Register as primary
+      ansible.builtin.command: "{{ repmgr_cmd }} primary register --force"
+      become: true
+      become_user: postgres
+      changed_when: true
+
+- name: Re-clone the other data nodes from the restored primary
+  hosts: pg_data
+  become: true
+  serial: 1
+  tasks:
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Rebuild
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: rebuild_standby.yml
+      vars:
+        repmgr_rebuild_keep_old_datadir: true
+      when: inventory_hostname != target
+
+- name: Witness and repmgrd
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Re-register witness
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: witness.yml
+      vars:
+        repmgr_force_register: true
+      when: inventory_hostname in groups['pg_witness']
+    - name: Start repmgrd
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: repmgrd.yml
+    - name: Resume backups
+      ansible.builtin.file:
+        path: "{{ pgops_maintenance_flag }}"
+        state: absent
+    - name: New full backup after restore (new timeline)
+      ansible.builtin.command: /usr/local/bin/pg_backup.sh --type=full
+      become: true
+      become_user: postgres
+      async: 43200
+      poll: 30
+      changed_when: true
+      when: pg_node_role == 'standby'
+
+- name: Verify
+  ansible.builtin.import_playbook: _verify_topology.yml

@@ -1,0 +1,55 @@
+---
+# Clone this node from pg_current_primary, start it and register it as a standby.
+# The data directory must be empty or absent.
+- name: Drop a stale inactive replication slot for this node on the primary
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d postgres -c "SELECT count(pg_drop_replication_slot(slot_name)) FROM pg_replication_slots
+      WHERE slot_name = 'repmgr_slot_{{ repmgr_node_id | int }}' AND NOT active"
+  become: true
+  become_user: postgres
+  delegate_to: "{{ pg_current_primary }}"
+  register: _slot_drop
+  changed_when: _slot_drop.stdout | trim != '0'
+
+- name: Parent directory of the data directory
+  ansible.builtin.file:
+    path: "{{ pg_data_dir | dirname }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: repmgr standby clone from {{ pg_current_primary }}
+  ansible.builtin.command: >-
+    {{ repmgr_cmd }} -h {{ hostvars[pg_current_primary].pg_node_ip }} -p {{ pg_port }}
+    -U {{ repmgr_user }} -d {{ repmgr_db }} standby clone --fast-checkpoint
+  become: true
+  become_user: postgres
+  async: "{{ repmgr_clone_timeout }}"
+  poll: 30
+  changed_when: true
+
+- name: Start PostgreSQL
+  ansible.builtin.systemd:
+    name: "{{ pg_service }}"
+    state: started
+    enabled: true
+    masked: false
+    daemon_reload: true
+
+- name: Wait until PostgreSQL accepts connections
+  ansible.builtin.command: "{{ pg_bin_dir }}/pg_isready -q -p {{ pg_port }}"
+  register: _ready
+  until: _ready.rc == 0
+  retries: 90
+  delay: 5
+  changed_when: false
+
+- name: Register standby
+  ansible.builtin.command: "{{ repmgr_cmd }} standby register --force"
+  become: true
+  become_user: postgres
+  changed_when: true
+
+- name: Wait for streaming
+  ansible.builtin.include_tasks: wait_streaming.yml

@@ -1,0 +1,159 @@
+---
+# Major upgrade PREFLIGHT - no downtime, safe to run any time before the window:
+# installs the new version side by side, initdb's the new cluster on the primary and
+# runs pg_upgrade --check against the live old cluster.
+#   ansible-playbook ... playbooks/major_upgrade_preflight.yml -e pg_new_version=17 -e confirm=YES
+- name: Discover and validate
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+    - secrets
+  tasks:
+    - name: Validate
+      ansible.builtin.assert:
+        that:
+          - pg_new_version is defined
+          - pg_new_version | int > pg_version | int
+          - pg_current_primary != ''
+          - groups['pg_cluster'] | map('extract', hostvars, 'pg_node_role') | select('in', ['primary', 'standby', 'witness']) | list | length == groups['pg_cluster'] | length
+          - confirm | default('') == 'YES'
+        fail_msg: "Needs -e pg_new_version=<N> (> {{ pg_version }}), a healthy cluster (all nodes up) and -e confirm=YES"
+      run_once: true
+
+    - name: Upgrade facts
+      ansible.builtin.set_fact:
+        upg_old_version: "{{ pg_version | string }}"
+        upg_new_version: "{{ pg_new_version | string }}"
+        upg_old_bin: "/usr/pgsql-{{ pg_version }}/bin"
+        upg_new_bin: "/usr/pgsql-{{ pg_new_version }}/bin"
+        upg_old_data: "{{ pg_data_dir }}"
+        upg_new_data: "{{ pg_data_dir_template | replace('{version}', pg_new_version | string) }}"
+        upg_old_service: "{{ pg_service }}"
+        upg_old_repmgr_service: "{{ repmgr_service }}"
+        upg_primary: "{{ pg_current_primary }}"
+
+# ---------------------------------------------------------------- preflight (no downtime)
+- name: "Preflight: install the new version side by side"
+  hosts: pg_cluster
+  become: true
+  vars:
+    pg_repo_versions: ["{{ upg_old_version }}", "{{ upg_new_version }}"]
+  tasks:
+    - name: Repositories
+      ansible.builtin.include_role:
+        name: pg_repo
+    - name: PostgreSQL packages (new version)
+      ansible.builtin.include_role:
+        name: postgresql
+        tasks_from: packages.yml
+      vars:
+        pg_version: "{{ upg_new_version }}"
+    - name: repmgr packages (new version)
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: packages.yml
+      vars:
+        pg_version: "{{ upg_new_version }}"
+
+- name: "Preflight: new cluster + pg_upgrade --check on the primary"
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Primary preflight
+      when: inventory_hostname == upg_primary
+      block:
+        - name: Read initdb settings of the old cluster
+          ansible.builtin.command: >-
+            {{ psql_cmd }} -d postgres -F '|' -c "SELECT d.datlocprovider, d.datcollate, d.datctype,
+              pg_encoding_to_char(d.encoding),
+              coalesce(to_jsonb(d)->>'datlocale', to_jsonb(d)->>'daticulocale', ''),
+              current_setting('data_checksums')
+              FROM pg_database d WHERE d.datname = 'template1'"
+          become: true
+          become_user: postgres
+          register: _upg_init
+          changed_when: false
+
+        - name: Build initdb options for the new cluster
+          vars:
+            f: "{{ _upg_init.stdout.split('|') }}"
+          ansible.builtin.set_fact:
+            upg_initdb_opts: >-
+              --encoding={{ f[3] }} --lc-collate={{ f[1] }} --lc-ctype={{ f[2] }}
+              {% if f[0] == 'i' %}--locale-provider=icu --icu-locale={{ f[4] }}
+              {% elif f[0] == 'b' %}--locale-provider=builtin --builtin-locale={{ f[4] }}
+              {% else %}--locale-provider=libc{% endif %}
+              {% if f[5] == 'on' %}--data-checksums{% elif upg_new_version | int >= 18 %}--no-data-checksums{% endif %}
+              --auth-local=peer --auth-host=scram-sha-256
+
+        - name: Refuse a new data directory that was already upgraded
+          ansible.builtin.stat:
+            path: "{{ upg_new_data }}/.pgops_upgraded"
+          register: _upg_done
+
+        - name: Already upgraded
+          ansible.builtin.fail:
+            msg: "{{ upg_new_data }} was already upgraded. Set pg_version={{ upg_new_version }} in the inventory."
+          when: _upg_done.stat.exists
+
+        - name: New data directory
+          ansible.builtin.file:
+            path: "{{ upg_new_data }}"
+            state: directory
+            owner: postgres
+            group: postgres
+            mode: "0700"
+
+        - name: --link needs old and new data on the same filesystem
+          ansible.builtin.command: "stat -c %d {{ upg_old_data }} {{ upg_new_data }}"
+          register: _upg_fs
+          changed_when: false
+          failed_when: _upg_fs.stdout_lines | unique | length != 1
+
+        - name: initdb new cluster
+          ansible.builtin.command:
+            cmd: "{{ upg_new_bin }}/initdb -D {{ upg_new_data }} {{ upg_initdb_opts }}"
+            creates: "{{ upg_new_data }}/PG_VERSION"
+          become: true
+          become_user: postgres
+
+        - name: Carry over ALTER SYSTEM settings
+          ansible.builtin.copy:
+            src: "{{ upg_old_data }}/postgresql.auto.conf"
+            dest: "{{ upg_new_data }}/postgresql.auto.conf"
+            remote_src: true
+            owner: postgres
+            group: postgres
+            mode: "0600"
+
+        - name: Strip replication settings from the carried-over auto.conf
+          ansible.builtin.lineinfile:
+            path: "{{ upg_new_data }}/postgresql.auto.conf"
+            regexp: '^\s*(primary_conninfo|primary_slot_name)\s*='
+            state: absent
+
+        - name: Managed config in the new cluster
+          ansible.builtin.include_role:
+            name: postgresql
+            tasks_from: config_files.yml
+          vars:
+            pg_version: "{{ upg_new_version }}"
+
+        - name: pg_upgrade --check (live)
+          ansible.builtin.command:
+            cmd: >-
+              {{ upg_new_bin }}/pg_upgrade --check --link
+              -b {{ upg_old_bin }} -B {{ upg_new_bin }} -d {{ upg_old_data }} -D {{ upg_new_data }}
+              -p {{ pg_port }} -P 50432 --socketdir={{ pg_socket_dir }}
+              -O "-c archive_mode=off"
+            chdir: "{{ pg_home_dir }}"
+          become: true
+          become_user: postgres
+          register: _upg_check
+          changed_when: false
+
+        - name: pg_upgrade --check
+          ansible.builtin.debug:
+            var: _upg_check.stdout_lines

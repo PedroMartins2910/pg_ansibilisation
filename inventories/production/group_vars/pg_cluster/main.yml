@@ -1,0 +1,46 @@
+---
+pg_cluster_name: billing
+pg_version: 16
+# pg_repo_base_url: https://mirror.internal/pgdg   # default: download.postgresql.org
+
+# Application database: schema has the same name
+pg_db_name: billing
+pg_role_ro_name: billing_read
+pg_role_dml_name: billing_write
+pg_role_ddl_name: billing_owner
+
+# Login users; passwords: Vault <hashi_vault_users_path>/<name>, key "password"
+pg_login_users:
+  - {name: billing_app, group: dml}
+  - {name: billing_report, group: ro}
+  - {name: billing_migrate, group: ddl}
+
+pg_hba_app_cidrs:
+  - 10.20.0.0/16
+
+# Floating IP for clients (all data nodes on the same L2 segment)
+vip_address: 10.10.0.10
+vip_prefix: 24
+# vip_interface: eth0      # default: interface of the default route
+
+# PostgreSQL tuning
+pg_settings_extra:
+  shared_buffers: 8GB
+  effective_cache_size: 24GB
+  work_mem: 32MB
+  maintenance_work_mem: 1GB
+  max_connections: 300
+
+# Backups: pgBackRest -> on-prem S3 (credentials from Vault, see hashi_vault.yml)
+pgbackrest_s3_endpoint: s3.storage.internal
+pgbackrest_s3_port: 443
+pgbackrest_s3_bucket: pg-backups
+pgbackrest_s3_region: us-east-1
+pgbackrest_s3_uri_style: path
+pgbackrest_s3_ca_cert_src: "{{ inventory_dir }}/files/s3-ca.pem"   # your private CA ("" if publicly trusted)
+pgbackrest_retention_full: 14       # daily full backups -> 14 days of PITR
+backup_cron_hour: "1"
+pgbackrest_encrypt: false           # true -> cipher pass from Vault <base>/pgbackrest_cipher
+
+# pgBadger: placeholder report script until the in-house one is provided
+# pgbadger_script_src: "{{ inventory_dir }}/files/pgbadger_report.sh.j2"

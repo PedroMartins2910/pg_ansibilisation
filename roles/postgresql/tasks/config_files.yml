@@ -1,0 +1,38 @@
+---
+# Only writes files. Safe to call against a data directory whose server is not running
+# (used by major_upgrade for the new cluster).
+- name: conf.d directory
+  ansible.builtin.file:
+    path: "{{ pg_data_dir }}/conf.d"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: Include conf.d from postgresql.conf
+  ansible.builtin.lineinfile:
+    path: "{{ pg_data_dir }}/postgresql.conf"
+    regexp: '^\s*include_dir\s*='
+    line: "include_dir = 'conf.d'    # managed by pg-ops"
+    insertafter: EOF
+  notify: Reload postgresql
+
+- name: Managed settings
+  ansible.builtin.template:
+    src: ansible.conf.j2
+    dest: "{{ pg_data_dir }}/conf.d/00-ansible.conf"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  notify: Reload postgresql
+
+- name: Managed pg_hba.conf block
+  ansible.builtin.blockinfile:
+    path: "{{ pg_data_dir }}/pg_hba.conf"
+    block: "{{ lookup('ansible.builtin.template', 'pg_hba_block.j2') }}"
+    insertbefore: BOF
+    marker: "# {mark} pg-ops managed block"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  notify: Reload postgresql

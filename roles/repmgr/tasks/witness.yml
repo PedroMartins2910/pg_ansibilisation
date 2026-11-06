@@ -1,0 +1,20 @@
+---
+- name: Witness registration
+  when: pg_node_role == 'witness'
+  block:
+    - name: repmgr database objects on the witness
+      ansible.builtin.include_tasks: repmgr_db.yml
+
+    - name: Registration status
+      ansible.builtin.include_tasks: check_registration.yml
+
+    - name: Register witness against the primary
+      ansible.builtin.command: >-
+        {{ repmgr_cmd }} witness register -h {{ hostvars[pg_current_primary].pg_node_ip }} -p {{ pg_port }}
+        -U {{ repmgr_user }} -d {{ repmgr_db }} {{ '--force' if repmgr_force_register | bool else '' }}
+      become: true
+      become_user: postgres
+      changed_when: true
+      when:
+        - pg_current_primary != ''
+        - not repmgr_registered or repmgr_force_register | bool

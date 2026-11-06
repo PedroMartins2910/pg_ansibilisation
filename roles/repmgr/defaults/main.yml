@@ -1,0 +1,20 @@
+---
+repmgr_packages: ["repmgr_{{ pg_version }}"]
+
+# Host vars (required): repmgr_node_id (unique int). Optional: repmgr_location, repmgr_priority.
+repmgr_location: default
+repmgr_priority: 100                   # 0 = never promote this node
+repmgr_failover: automatic
+repmgr_reconnect_attempts: 6
+repmgr_reconnect_interval: 5
+repmgr_monitor_interval_secs: 2
+repmgr_log_dir: /var/log/repmgr
+repmgr_update_password: on_create      # 'always' to rotate from Vault on every run
+repmgr_event_hook: /usr/local/bin/repmgr_event_hook.sh
+
+repmgr_clone_timeout: 43200            # seconds (12h) for big databases
+repmgr_wait_streaming_retries: 90      # x 10s
+repmgr_rebuild_keep_old_datadir: false # rebuild: move old datadir aside instead of deleting
+repmgr_rejoin_fallback_rebuild: true   # rejoin: fall back to a full re-clone if pg_rewind fails
+repmgr_switchover_timeout: 900
+repmgr_ssh_options: "-q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"

@@ -1,0 +1,36 @@
+---
+- name: Install packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: pg-ops directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ pgops_conf_dir }}", owner: root, mode: "0755"}
+    - {path: "{{ pgops_log_dir }}", owner: postgres, mode: "0750"}
+
+- name: Shared environment file for pg-ops scripts
+  ansible.builtin.template:
+    src: pg.env.j2
+    dest: "{{ pgops_conf_dir }}/pg.env"
+    owner: root
+    group: postgres
+    mode: "0640"
+
+- name: systemd drop-in pinning PGDATA
+  ansible.builtin.import_tasks: systemd.yml
+
+- name: Initialise a new cluster (greenfield primary or witness only)
+  ansible.builtin.include_tasks: initdb.yml
+  when:
+    - pg_node_role == 'uninitialized'
+    - (inventory_hostname in (groups['pg_witness'] | default([])))
+      or (pg_initial_primary | bool and pg_current_primary == '' and inventory_hostname in groups['pg_data'])
+
+- name: Configure an initialised cluster
+  ansible.builtin.include_tasks: config.yml
+  when: pg_initialized | bool or (_pg_fresh_init | default(false))

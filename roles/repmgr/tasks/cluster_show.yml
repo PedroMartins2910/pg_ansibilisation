@@ -1,0 +1,12 @@
+---
+- name: repmgr cluster show
+  ansible.builtin.command: "{{ repmgr_cmd }} cluster show"
+  become: true
+  become_user: postgres
+  register: _cluster_show
+  changed_when: false
+  failed_when: false
+
+- name: Cluster
+  ansible.builtin.debug:
+    msg: "{{ _cluster_show.stdout_lines + _cluster_show.stderr_lines }}"

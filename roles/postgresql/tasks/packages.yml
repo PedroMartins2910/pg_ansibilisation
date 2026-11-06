@@ -1,0 +1,5 @@
+---
+- name: Install PostgreSQL {{ pg_version }} packages
+  ansible.builtin.dnf:
+    name: "{{ pg_packages + pg_extra_packages + pg_support_packages }}"
+    state: present

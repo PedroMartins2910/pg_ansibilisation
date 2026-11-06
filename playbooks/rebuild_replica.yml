@@ -1,0 +1,35 @@
+---
+# Re-clone a standby from the current primary (DESTRUCTIVE for the target's data dir).
+#   ansible-playbook -i inventories/<env>/hosts.yml playbooks/rebuild_replica.yml -e target=<host> -e confirm=YES
+- name: Discover and validate
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: Validate request
+      ansible.builtin.assert:
+        that:
+          - target is defined
+          - target in groups['pg_data']
+          - pg_current_primary != ''
+          - target != pg_current_primary
+          - confirm | default('') == 'YES'
+        fail_msg: >-
+          Usage: -e target=<data node> -e confirm=YES. The target must not be the current
+          primary ({{ pg_current_primary | default('none', true) }}).
+      run_once: true
+
+- name: Rebuild standby
+  hosts: "{{ target | default('no_target_given') }}"
+  become: true
+  tasks:
+    - name: Rebuild
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: rebuild_standby.yml
+    - name: Cluster
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: cluster_show.yml

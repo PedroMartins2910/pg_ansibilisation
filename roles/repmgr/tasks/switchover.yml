@@ -1,0 +1,30 @@
+---
+# Run on the standby that must become the new primary.
+- name: Target must be a running standby
+  ansible.builtin.assert:
+    that: pg_node_role == 'standby'
+    fail_msg: "{{ inventory_hostname }} is '{{ pg_node_role }}', not a standby"
+
+- name: Switchover dry-run
+  ansible.builtin.command: "{{ repmgr_cmd }} standby switchover --siblings-follow --dry-run"
+  become: true
+  become_user: postgres
+  changed_when: false
+
+- name: Switchover (repmgrd is paused/unpaused automatically)
+  ansible.builtin.command: "{{ repmgr_cmd }} standby switchover --siblings-follow --verbose"
+  become: true
+  become_user: postgres
+  async: "{{ repmgr_switchover_timeout }}"
+  poll: 5
+  changed_when: true
+
+- name: Wait until this node is primary
+  ansible.builtin.command: "{{ psql_cmd }} -d postgres -c 'SELECT pg_is_in_recovery()'"
+  become: true
+  become_user: postgres
+  register: _sw_state
+  until: _sw_state.stdout | trim == 'f'
+  retries: 30
+  delay: 2
+  changed_when: false

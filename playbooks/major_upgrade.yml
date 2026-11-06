@@ -1,0 +1,199 @@
+---
+# Major upgrade with pg_upgrade --link (e.g. 16 -> 17).
+# DOWNTIME: from "stop primary" until the new primary is started (usually 1-5 minutes,
+# independent of database size thanks to --link).
+#
+#   ansible-playbook ... playbooks/major_upgrade.yml -e pg_new_version=17 -e confirm=YES
+#   (preflight only, no downtime:  playbooks/major_upgrade_preflight.yml, same vars)
+#
+# BACKUPS: pgBackRest stanza-upgrade runs before the new primary starts; old-version
+# backups stay in S3 until retention expires them (restoring them needs the old binaries).
+#
+# ROLLBACK: the old standby's data directory is never touched (the new version uses a
+# new path). Until you clean up, you can unmask postgresql-<old> on the standby and
+# promote it (losing writes made after the upgrade).
+#
+# AFTER SUCCESS: set pg_version: <new> in the inventory.
+
+- name: Preflight (no downtime)
+  ansible.builtin.import_playbook: major_upgrade_preflight.yml
+
+# ---------------------------------------------------------------- downtime window
+- name: "WINDOW: stop the cluster"
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Pause backups
+      ansible.builtin.file:
+        path: "{{ pgops_maintenance_flag }}"
+        state: touch
+        mode: "0644"
+
+    - name: Stop and mask old repmgrd
+      ansible.builtin.systemd:
+        name: "{{ upg_old_repmgr_service }}"
+        state: stopped
+        enabled: false
+        masked: true
+
+    - name: Stop and mask old PostgreSQL on standby and witness (kept as rollback copy)
+      ansible.builtin.systemd:
+        name: "{{ upg_old_service }}"
+        state: stopped
+        enabled: false
+        masked: true
+      when: inventory_hostname != upg_primary
+
+- name: "WINDOW: pg_upgrade on the primary"
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Upgrade the primary
+      when: inventory_hostname == upg_primary
+      block:
+        - name: Stop old primary (clean shutdown)
+          ansible.builtin.systemd:
+            name: "{{ upg_old_service }}"
+            state: stopped
+
+        - name: pg_upgrade --link
+          ansible.builtin.command:
+            cmd: >-
+              {{ upg_new_bin }}/pg_upgrade --link --jobs {{ ansible_processor_vcpus | default(2) }}
+              -b {{ upg_old_bin }} -B {{ upg_new_bin }} -d {{ upg_old_data }} -D {{ upg_new_data }}
+              -O "-c archive_mode=off"
+            chdir: "{{ pg_home_dir }}"
+          become: true
+          become_user: postgres
+          async: 7200
+          poll: 10
+          changed_when: true
+
+        - name: Mark the new data directory as upgraded
+          ansible.builtin.file:
+            path: "{{ upg_new_data }}/.pgops_upgraded"
+            state: touch
+            owner: postgres
+            mode: "0600"
+
+        - name: Mask the old PostgreSQL unit (old data dir is unusable after --link)
+          ansible.builtin.systemd:
+            name: "{{ upg_old_service }}"
+            enabled: false
+            masked: true
+
+- name: Switch every host to the new version for the rest of the run
+  hosts: pg_cluster
+  become: true
+  gather_facts: false
+  tasks:
+    - name: pg_version = new (fact, highest precedence for this run)
+      ansible.builtin.set_fact:
+        pg_version: "{{ upg_new_version }}"
+        repmgr_force_register: true
+
+- name: "WINDOW: start the new primary"
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Refresh topology for the new version
+      ansible.builtin.include_role:
+        name: pg_facts
+      vars:
+        pg_facts_allow_multiple_primaries: true
+
+    - name: Start the new primary
+      when: inventory_hostname == upg_primary
+      block:
+        - name: pgBackRest config for the new version
+          ansible.builtin.include_role:
+            name: pgbackrest
+            tasks_from: config.yml
+
+        - name: pgBackRest config limited to the local node (for stanza-upgrade)
+          ansible.builtin.include_role:
+            name: pgbackrest
+            tasks_from: config.yml
+          vars:
+            pgbackrest_conf: /etc/pgbackrest/pgbackrest-upgrade.conf
+            pgbackrest_single_host: true
+
+        - name: pgbackrest stanza-upgrade (offline, before the new cluster archives WAL)
+          ansible.builtin.command: >-
+            pgbackrest --config=/etc/pgbackrest/pgbackrest-upgrade.conf
+            --stanza={{ pgbackrest_stanza }} --no-online stanza-upgrade
+          become: true
+          become_user: postgres
+          changed_when: true
+
+        - name: Remove the temporary pgBackRest config
+          ansible.builtin.file:
+            path: /etc/pgbackrest/pgbackrest-upgrade.conf
+            state: absent
+
+        - name: Configure and start PostgreSQL {{ pg_version }}
+          ansible.builtin.include_role:
+            name: postgresql
+          vars:
+            pg_start_stopped_nodes: true
+
+        - name: Update extensions flagged by pg_upgrade
+          ansible.builtin.stat:
+            path: "{{ pg_home_dir }}/update_extensions.sql"
+          register: _upg_ext
+
+        - name: Run update_extensions.sql
+          ansible.builtin.command: "{{ psql_cmd }} -d postgres -f {{ pg_home_dir }}/update_extensions.sql"
+          become: true
+          become_user: postgres
+          changed_when: true
+          when: _upg_ext.stat.exists
+
+        - name: Update the repmgr extension
+          ansible.builtin.command: "{{ psql_cmd }} -d {{ repmgr_db }} -c 'ALTER EXTENSION repmgr UPDATE'"
+          become: true
+          become_user: postgres
+          changed_when: true
+
+        - name: Optimizer statistics in the background (cluster is already open)
+          ansible.builtin.command: "{{ pg_bin_dir }}/vacuumdb -p {{ pg_port }} --all --analyze-in-stages --jobs 4"
+          become: true
+          become_user: postgres
+          async: 86400
+          poll: 0
+          register: _upg_analyze
+          changed_when: true
+
+# ---------------------------------------------------------------- after the window
+# From here on this is a normal converge with pg_version = new:
+#   primary re-registered (--force), standby cloned into the new data dir,
+#   witness re-initialised and registered, repmgrd, VIP, pgBackRest (pg paths) and
+#   pgBadger switched to the new binaries.
+- name: Converge on the new version
+  ansible.builtin.import_playbook: site.yml
+
+- name: Post-upgrade
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Resume backups
+      ansible.builtin.file:
+        path: "{{ pgops_maintenance_flag }}"
+        state: absent
+
+    - name: Fresh full backup (the new cluster has a NEW system identifier)
+      ansible.builtin.command: /usr/local/bin/pg_backup.sh --type=full
+      become: true
+      become_user: postgres
+      async: 43200
+      poll: 30
+      changed_when: true
+      when: pg_node_role == 'standby'
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "1. Set pg_version: {{ upg_new_version }} in the inventory NOW."
+          - "2. Check the ANALYZE job on {{ upg_primary }} (async id {{ hostvars[upg_primary]._upg_analyze.ansible_job_id | default('-') }})."
+          - "3. When happy, delete old data: {{ pg_home_dir }}/delete_old_cluster.sh on {{ upg_primary }}, rm -rf {{ upg_old_data }} on the other nodes, remove postgresql{{ upg_old_version }}* packages."
+      run_once: true

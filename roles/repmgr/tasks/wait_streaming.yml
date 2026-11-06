@@ -1,0 +1,14 @@
+---
+# Wait until THIS node streams from the current primary.
+- name: Wait for {{ repmgr_node_name }} to stream from {{ pg_current_primary }}
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d postgres -c "SELECT count(*) FROM pg_stat_replication
+      WHERE application_name = '{{ repmgr_node_name }}' AND state = 'streaming'"
+  become: true
+  become_user: postgres
+  delegate_to: "{{ pg_current_primary }}"
+  register: _streaming
+  until: _streaming.stdout | trim == '1'
+  retries: "{{ repmgr_wait_streaming_retries }}"
+  delay: 10
+  changed_when: false

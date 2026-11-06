@@ -1,0 +1,68 @@
+---
+# Read-only health report: topology, lag, VIP owner, WAL archiving, backups.
+- name: Cluster status
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: repmgr cluster show
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: cluster_show.yml
+      when: inventory_hostname == pg_current_primary
+
+    - name: Replication
+      ansible.builtin.command: >-
+        {{ psql_cmd }} -d postgres -F ' | ' -c "SELECT application_name, state, sync_state,
+          pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)) AS lag_bytes, replay_lag
+          FROM pg_stat_replication"
+      become: true
+      become_user: postgres
+      register: _st_repl
+      changed_when: false
+      when: inventory_hostname == pg_current_primary
+
+    - name: WAL archiver
+      ansible.builtin.command: >-
+        {{ psql_cmd }} -d postgres -F ' | ' -c "SELECT archived_count, last_archived_wal, last_archived_time,
+          failed_count, last_failed_wal, last_failed_time FROM pg_stat_archiver"
+      become: true
+      become_user: postgres
+      register: _st_arch
+      changed_when: false
+      when: inventory_hostname == pg_current_primary
+
+    - name: VIP
+      ansible.builtin.command: /usr/local/sbin/vip_ctl.sh status
+      register: _st_vip
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname in groups['pg_data']
+
+    - name: pgBackRest repository
+      ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} info"
+      become: true
+      become_user: postgres
+      register: _st_pbr
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == pg_current_primary
+
+    - name: Last backup run on this node
+      ansible.builtin.command: cat /var/lib/pg-ops/backup.status
+      register: _st_bk
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname in groups['pg_data']
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          role: "{{ pg_node_role }}"
+          vip: "{{ _st_vip.stdout | default('-') }}"
+          replication: "{{ _st_repl.stdout_lines | default([]) }}"
+          archiver: "{{ _st_arch.stdout_lines | default([]) }}"
+          last_backup_run: "{{ _st_bk.stdout | default('-') }}"
+          pgbackrest: "{{ _st_pbr.stdout_lines | default([]) }}"

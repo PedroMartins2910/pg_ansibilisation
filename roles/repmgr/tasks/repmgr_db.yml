@@ -1,0 +1,38 @@
+---
+# repmgr role + database (primary and witness only - both are writable).
+- name: repmgr role
+  community.postgresql.postgresql_user:
+    name: "{{ repmgr_user }}"
+    password: "{{ repmgr_password }}"
+    role_attr_flags: LOGIN,SUPERUSER,REPLICATION
+    update_password: "{{ repmgr_update_password }}"
+    port: "{{ pg_port }}"
+    login_unix_socket: "{{ pg_socket_dir }}"
+  become: true
+  become_user: postgres
+  no_log: true
+
+- name: repmgr database
+  community.postgresql.postgresql_db:
+    name: "{{ repmgr_db }}"
+    owner: "{{ repmgr_user }}"
+    port: "{{ pg_port }}"
+    login_unix_socket: "{{ pg_socket_dir }}"
+  become: true
+  become_user: postgres
+
+- name: Read repmgr role settings
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d postgres -c "SELECT coalesce(array_to_string(rolconfig, ';'), '') FROM pg_roles WHERE rolname = '{{ repmgr_user }}'"
+  become: true
+  become_user: postgres
+  register: _repmgr_rolconfig
+  changed_when: false
+
+- name: Set repmgr search_path
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d postgres -c "ALTER ROLE {{ repmgr_user }} SET search_path TO repmgr, \"$user\", public"
+  become: true
+  become_user: postgres
+  changed_when: true
+  when: "'search_path=repmgr' not in _repmgr_rolconfig.stdout"

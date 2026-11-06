@@ -1,0 +1,4 @@
+---
+- name: Restart repmgrd
+  ansible.builtin.command: systemctl try-restart {{ repmgr_service }}
+  changed_when: true

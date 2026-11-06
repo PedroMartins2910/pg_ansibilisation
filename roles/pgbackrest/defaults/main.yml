@@ -1,0 +1,44 @@
+---
+# pgBackRest runs on the data nodes (no dedicated backup host) with ONE repository
+# in an on-prem S3-compatible bucket. Both data nodes carry the same config:
+# pg1 = local instance, pg2 = peer (over SSH as postgres) so a backup started on
+# the standby copies files from the standby (backup-standby) and only talks to
+# the primary for start/stop backup.
+# pgbackrest_stanza and pgbackrest_encrypt live in playbooks/group_vars/all.yml.
+
+pgbackrest_packages: [pgbackrest]
+pgbackrest_conf: /etc/pgbackrest/pgbackrest.conf
+pgbackrest_log_dir: /var/log/pgbackrest
+pgbackrest_spool_dir: /var/spool/pgbackrest
+pgbackrest_state_dir: /var/lib/pg-ops
+
+# --- S3 repository (on-prem S3-compatible: MinIO, Ceph RGW, StorageGRID, ECS, ...)
+pgbackrest_s3_endpoint: s3.example.internal
+pgbackrest_s3_port: 443
+pgbackrest_s3_bucket: pgbackrest
+pgbackrest_s3_region: us-east-1        # required by pgBackRest even on-prem; any value your S3 accepts
+pgbackrest_s3_uri_style: path          # on-prem S3 is usually path-style
+pgbackrest_s3_verify_tls: true
+pgbackrest_s3_ca_cert_src: ""          # local PEM of your private CA -> deployed to the hosts
+pgbackrest_s3_ca_file: /etc/pgbackrest/s3-ca.pem
+pgbackrest_repo_path: /pgbackrest      # prefix inside the bucket (stanza dirs go below)
+
+# --- Retention: daily FULL backups, keep N fulls; WAL is expired with them
+pgbackrest_retention_full: 14
+
+# --- Schedule (cron on both data nodes; the wrapper only runs on the standby)
+backup_type: full
+backup_cron_minute: "0"
+backup_cron_hour: "1"
+backup_cron_weekday: "*"
+backup_allow_on_primary: false         # fallback to the primary when no standby streams
+
+# --- Performance
+pgbackrest_process_max: 4
+pgbackrest_compress_type: zst
+pgbackrest_compress_level: 3
+pgbackrest_archive_async: true         # parallel/async WAL push to S3 (recommended)
+pgbackrest_archive_push_queue_max: ""  # e.g. 20GiB: drop WAL instead of filling pg_wal if S3 is down (breaks PITR!)
+
+# Validate the whole chain (S3 + archive_command) on every converge
+pgbackrest_run_check: true

@@ -1,0 +1,58 @@
+---
+# Rolling minor upgrade of ONE node (it must not be the primary).
+- name: Never minor-upgrade the primary in place
+  ansible.builtin.assert:
+    that: pg_node_role in ['standby', 'witness']
+    fail_msg: "{{ inventory_hostname }} is '{{ pg_node_role }}' - switch over first"
+
+- name: Stop repmgrd
+  ansible.builtin.systemd:
+    name: "{{ repmgr_service }}"
+    state: stopped
+
+- name: Update PostgreSQL and repmgr packages
+  ansible.builtin.dnf:
+    name:
+      - "postgresql{{ pg_version }}*"
+      - "repmgr_{{ pg_version }}*"
+      - pgbackrest            # updated only where installed (update_only)
+    state: latest
+    update_only: true
+  register: _minor_pkgs
+
+- name: Installed server version
+  ansible.builtin.command: "{{ pg_bin_dir }}/postgres -V"
+  register: _minor_installed
+  changed_when: false
+
+- name: Running server version
+  ansible.builtin.command: "{{ psql_cmd }} -d postgres -c 'SHOW server_version'"
+  become: true
+  become_user: postgres
+  register: _minor_running
+  changed_when: false
+
+- name: Restart PostgreSQL on the new binaries
+  ansible.builtin.systemd:
+    name: "{{ pg_service }}"
+    state: restarted
+  when: >-
+    _minor_pkgs is changed or (_minor_running.stdout | trim).split(' ')[0] not in _minor_installed.stdout
+
+- name: Wait until PostgreSQL accepts connections
+  ansible.builtin.command: "{{ pg_bin_dir }}/pg_isready -q -p {{ pg_port }}"
+  register: _ready
+  until: _ready.rc == 0
+  retries: 90
+  delay: 5
+  changed_when: false
+
+- name: Wait for streaming
+  ansible.builtin.include_tasks: wait_streaming.yml
+  when: pg_node_role == 'standby'
+
+- name: Start repmgrd
+  ansible.builtin.systemd:
+    name: "{{ repmgr_service }}"
+    state: started
+    enabled: true

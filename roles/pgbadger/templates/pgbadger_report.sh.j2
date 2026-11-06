@@ -1,0 +1,15 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# PLACEHOLDER pgBadger report - replace by setting pgbadger_script_src to the in-house script.
+# Builds an incremental report from yesterday's log file.
+set -euo pipefail
+source /etc/pg-ops/pg.env
+OUT={{ pgbadger_output_dir | quote }}
+LOGFILE="$PGDATA/log/postgresql-$(LC_ALL=C date -d yesterday +%a).log"
+if [[ ! -f "$LOGFILE" ]]; then
+  echo "$(date '+%F %T') no log file $LOGFILE"
+  exit 0
+fi
+pgbadger --quiet --incremental --outdir "$OUT" --retention {{ pgbadger_retention_weeks | int }} \
+  --prefix {{ pg_log_line_prefix | quote }} {{ pgbadger_extra_args }} "$LOGFILE"
+echo "$(date '+%F %T') report updated in $OUT"

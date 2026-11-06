@@ -1,0 +1,70 @@
+---
+- name: VIP settings are required
+  ansible.builtin.assert:
+    that:
+      - vip_address | length > 0
+      - vip_interface | length > 0
+    fail_msg: "Set vip_address / vip_interface (or vip_enabled: false)"
+    quiet: true
+  when: vip_enabled | bool
+
+- name: Packages
+  ansible.builtin.dnf:
+    name: "{{ vip_packages }}"
+    state: present
+
+- name: VIP settings file
+  ansible.builtin.copy:
+    dest: "{{ pgops_conf_dir }}/vip.env"
+    owner: root
+    group: postgres
+    mode: "0640"
+    content: |
+      # {{ ansible_managed }}
+      VIP_ENABLED={{ vip_enabled | bool | lower }}
+      VIP_ADDRESS={{ vip_address | quote }}
+      VIP_PREFIX={{ vip_prefix | string | quote }}
+      VIP_INTERFACE={{ vip_interface | quote }}
+      VIP_GUARD_INTERVAL={{ vip_guard_interval | string | quote }}
+  notify: Restart vip-guard
+
+- name: VIP scripts
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: vip_ctl.sh, dest: /usr/local/sbin/vip_ctl.sh, group: root, mode: "0755"}
+    - {src: vip_guard.sh, dest: /usr/local/sbin/vip_guard.sh, group: root, mode: "0755"}
+    - {src: repmgr_event_hook.sh, dest: /usr/local/bin/repmgr_event_hook.sh, group: postgres, mode: "0750"}
+  notify: Restart vip-guard
+
+- name: vip-guard systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/vip-guard.service
+    mode: "0644"
+    content: |
+      # {{ ansible_managed }}
+      [Unit]
+      Description=pg-ops VIP guard (VIP only on the writable primary)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/sbin/vip_guard.sh
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart vip-guard
+
+- name: vip-guard service state
+  ansible.builtin.systemd:
+    name: vip-guard.service
+    enabled: "{{ vip_enabled | bool }}"
+    state: "{{ 'started' if vip_enabled | bool else 'stopped' }}"
+    daemon_reload: true

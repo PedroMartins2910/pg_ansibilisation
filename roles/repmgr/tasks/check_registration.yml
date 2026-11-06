@@ -1,0 +1,30 @@
+---
+# Sets repmgr_registered. Fails if the node is registered under a different
+# node_id / node_name than the inventory says (protects adopted clusters).
+- name: Look up this node in repmgr metadata
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d {{ repmgr_db }}
+    -c "SELECT node_id || '|' || node_name || '|' || type FROM repmgr.nodes
+        WHERE node_id = {{ repmgr_node_id | int }} OR node_name = '{{ repmgr_node_name }}'"
+  become: true
+  become_user: postgres
+  register: _repmgr_lookup
+  changed_when: false
+  failed_when: false
+
+- name: Evaluate registration
+  ansible.builtin.set_fact:
+    repmgr_registered: >-
+      {{ _repmgr_lookup.rc == 0 and
+         (_repmgr_lookup.stdout_lines | select('match', '^' ~ (repmgr_node_id | int) ~ '\|' ~ repmgr_node_name ~ '\|') | list | length) > 0 }}
+
+- name: Refuse on node_id / node_name mismatch
+  ansible.builtin.fail:
+    msg: >-
+      repmgr metadata on {{ inventory_hostname }} does not match the inventory
+      (node_id={{ repmgr_node_id }}, node_name={{ repmgr_node_name }}): {{ _repmgr_lookup.stdout_lines }}.
+      Fix repmgr_node_id / repmgr_node_name in the inventory to match the existing cluster.
+  when:
+    - _repmgr_lookup.rc == 0
+    - _repmgr_lookup.stdout_lines | length > 0
+    - not repmgr_registered

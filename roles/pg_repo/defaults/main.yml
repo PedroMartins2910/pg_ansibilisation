@@ -1,0 +1,13 @@
+---
+pg_repo_manage: true
+# Override with your internal mirror if needed (same directory layout as PGDG)
+pg_repo_base_url: "https://download.postgresql.org/pub/repos/yum"
+pg_repo_gpg_key_url: "https://download.postgresql.org/pub/repos/yum/keys/PGDG-RPM-GPG-KEY-RHEL"
+pg_repo_gpgcheck: true
+pg_repo_versions: ["{{ pg_version }}"]
+pg_repo_common_enabled: true          # pgbadger and other tools
+pg_repo_arch_path: "redhat/rhel-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}"
+
+pg_repo_epel_manage: true             # pgbadger perl dependencies
+pg_repo_epel_baseurl: "https://dl.fedoraproject.org/pub/epel/{{ ansible_distribution_major_version }}/Everything/{{ ansible_architecture }}/"
+pg_repo_epel_gpg_key_url: "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-{{ ansible_distribution_major_version }}"

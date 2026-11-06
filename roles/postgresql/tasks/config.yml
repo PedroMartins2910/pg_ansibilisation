@@ -1,0 +1,65 @@
+---
+- name: Configuration files
+  ansible.builtin.include_tasks: config_files.yml
+
+- name: Enable and start PostgreSQL (running or freshly initialised nodes only)
+  ansible.builtin.systemd:
+    name: "{{ pg_service }}"
+    state: started
+    enabled: true
+  when: >-
+    (_pg_fresh_init | default(false))
+    or pg_node_role in ['primary', 'standby', 'witness']
+    or pg_start_stopped_nodes | bool
+
+- name: Skipping stopped node
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} is STOPPED - not starting it (it may be a fenced old primary).
+      Use rejoin.yml / rebuild_replica.yml, or -e pg_start_stopped_nodes=true.
+  when:
+    - pg_node_role == 'stopped'
+    - not (pg_start_stopped_nodes | bool)
+
+- name: Apply pending reloads
+  ansible.builtin.meta: flush_handlers
+
+- name: Look for settings waiting for a restart
+  ansible.builtin.command: >-
+    {{ psql_cmd }} -d postgres -c "SELECT coalesce(string_agg(name, ','), '') FROM pg_settings WHERE pending_restart"
+  become: true
+  become_user: postgres
+  register: _pg_pending
+  changed_when: false
+  failed_when: false
+
+- name: Restart PostgreSQL to apply pending settings
+  ansible.builtin.systemd:
+    name: "{{ pg_service }}"
+    state: restarted
+  when:
+    - _pg_pending.rc == 0
+    - _pg_pending.stdout | length > 0
+    - pg_allow_restart | bool
+
+- name: Pending restart not applied
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: settings [{{ _pg_pending.stdout }}] need a restart.
+      Re-run with -e pg_allow_restart=true (restart standbys first, then switchover,
+      then the old primary - or simply use minor_upgrade.yml which does exactly that).
+  when:
+    - _pg_pending.rc == 0
+    - _pg_pending.stdout | length > 0
+    - not (pg_allow_restart | bool)
+
+- name: Wait until PostgreSQL accepts connections
+  ansible.builtin.command: "{{ pg_bin_dir }}/pg_isready -q -p {{ pg_port }}"
+  register: _pg_ready
+  until: _pg_ready.rc == 0
+  retries: 60
+  delay: 2
+  changed_when: false
+  when: >-
+    (_pg_fresh_init | default(false))
+    or pg_node_role in ['primary', 'standby', 'witness']

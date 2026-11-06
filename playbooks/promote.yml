@@ -1,0 +1,89 @@
+---
+# MANUAL failover: the primary is dead and repmgrd did not (or must not) promote.
+#   ansible-playbook ... playbooks/promote.yml -e new_primary=<standby> -e confirm=YES
+# The old primary is fenced (stopped + masked) if reachable. Afterwards run rejoin.yml.
+- name: Discover (unreachable hosts tolerated)
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  ignore_unreachable: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: Validate request
+      ansible.builtin.assert:
+        that:
+          - new_primary is defined
+          - new_primary in groups['pg_data']
+          - hostvars[new_primary].pg_node_role | default('') in ['standby', 'primary']
+          - pg_current_primary in ['', new_primary]
+          - confirm | default('') == 'YES'
+        fail_msg: >-
+          Usage: -e new_primary=<standby> -e confirm=YES. A running primary
+          ({{ pg_current_primary }}) exists - use switchover.yml instead.
+      run_once: true
+
+- name: Fence the old primary (best effort)
+  hosts: pg_data
+  become: true
+  gather_facts: false
+  ignore_unreachable: true
+  tasks:
+    - name: Stop and mask PostgreSQL and repmgrd on the failed node
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        masked: true
+      loop: ["{{ repmgr_service }}", "{{ pg_service }}"]
+      failed_when: false
+      when:
+        - inventory_hostname != new_primary
+        - pg_node_role | default('unreachable') != 'standby'
+
+    - name: Release the VIP on the failed node
+      ansible.builtin.command: /usr/local/sbin/vip_ctl.sh down
+      changed_when: true
+      failed_when: false
+      when:
+        - inventory_hostname != new_primary
+        - pg_node_role | default('unreachable') != 'standby'
+
+- name: Promote
+  hosts: "{{ new_primary | default('no_target_given') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Promote standby (skipped if repmgrd already did it)
+      when: pg_node_role == 'standby'
+      block:
+        - name: Pause repmgrd on reachable nodes
+          ansible.builtin.command: "{{ repmgr_cmd }} service pause"
+          become: true
+          become_user: postgres
+          changed_when: true
+          failed_when: false
+
+        - name: repmgr standby promote
+          ansible.builtin.command: "{{ repmgr_cmd }} standby promote --siblings-follow --verbose"
+          become: true
+          become_user: postgres
+          changed_when: true
+
+      always:
+        - name: Unpause repmgrd
+          ansible.builtin.command: "{{ repmgr_cmd }} service unpause"
+          become: true
+          become_user: postgres
+          changed_when: true
+          failed_when: false
+
+- name: Verify
+  ansible.builtin.import_playbook: _verify_topology.yml
+
+- name: Next steps
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Rejoin the old primary
+      ansible.builtin.debug:
+        msg: "When the failed node is back: playbooks/rejoin.yml -e target=<old primary> -e confirm=YES"

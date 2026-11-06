@@ -1,0 +1,95 @@
+---
+# Full idempotent converge. Safe against EXISTING clusters:
+#   - never initdb / clone over a data directory that has data
+#   - never starts a node found stopped (could be a fenced old primary)
+#   - never restarts PostgreSQL unless -e pg_allow_restart=true
+#   - aborts if repmgr node_id / node_name in the inventory differ from the cluster
+# First run against an existing cluster:  --check --diff
+- name: Discover cluster state and load secrets
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+    - secrets
+
+- name: Install and configure PostgreSQL
+  hosts: pg_cluster
+  become: true
+  roles:
+    - pg_repo
+    - postgresql
+
+- name: repmgr common configuration
+  hosts: pg_cluster
+  become: true
+  pre_tasks:
+    - name: Refresh topology (a primary may have just been initialised)
+      ansible.builtin.include_role:
+        name: pg_facts
+  roles:
+    - repmgr
+
+- name: repmgr primary
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Register primary
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: primary.yml
+      when: pg_node_role == 'primary'
+
+- name: repmgr standbys
+  hosts: pg_data
+  become: true
+  serial: 1
+  tasks:
+    - name: Clone / register standby
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: standby.yml
+      when: pg_node_role in ['standby', 'uninitialized', 'stopped']
+
+- name: repmgr witness
+  hosts: pg_witness
+  become: true
+  tasks:
+    - name: Register witness
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: witness.yml
+
+- name: repmgrd
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Start repmgrd
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: repmgrd.yml
+
+- name: VIP, backups, pgBadger
+  hosts: pg_data
+  become: true
+  roles:
+    - vip
+    - pgbackrest
+    - pgbadger
+
+- name: Application database
+  ansible.builtin.import_playbook: bootstrap_db.yml
+
+- name: Final state
+  hosts: pg_data
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Cluster
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: cluster_show.yml
+      when: inventory_hostname == pg_current_primary

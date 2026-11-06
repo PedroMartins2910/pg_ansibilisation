@@ -1,0 +1,113 @@
+---
+# Rolling minor upgrade (e.g. 16.4 -> 16.6). Client impact: ONE switchover reconnect.
+#   1. witness   2. standby   3. switchover to the upgraded standby   4. old primary
+#   5. optional switch back (-e minor_upgrade_switch_back=true)
+#   ansible-playbook ... playbooks/minor_upgrade.yml -e confirm=YES
+- name: Discover and validate
+  hosts: pg_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - pg_facts
+  tasks:
+    - name: Validate
+      ansible.builtin.assert:
+        that:
+          - pg_current_primary != ''
+          - pg_current_standbys | length >= 1
+          - confirm | default('') == 'YES'
+        fail_msg: "Needs a primary and at least one running standby, and -e confirm=YES"
+      run_once: true
+
+    - name: Remember original roles
+      ansible.builtin.set_fact:
+        minor_orig_primary: "{{ pg_current_primary }}"
+        minor_new_primary: "{{ pg_current_standbys | first }}"
+
+    - name: Pause backups during the upgrade
+      ansible.builtin.file:
+        path: "{{ pgops_maintenance_flag }}"
+        state: touch
+        mode: "0644"
+
+- name: Upgrade witness
+  hosts: pg_witness
+  become: true
+  serial: 1
+  tasks:
+    - name: Minor upgrade
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: node_minor_upgrade.yml
+      when: pg_node_role == 'witness'
+
+- name: Upgrade standbys
+  hosts: pg_data
+  become: true
+  serial: 1
+  tasks:
+    - name: Minor upgrade
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: node_minor_upgrade.yml
+      when: inventory_hostname != minor_orig_primary
+
+- name: Switchover to the upgraded standby
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Switchover
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: switchover.yml
+      when: inventory_hostname == minor_new_primary
+
+- name: Upgrade the old primary (now a standby)
+  hosts: pg_data
+  become: true
+  serial: 1
+  tasks:
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Minor upgrade
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: node_minor_upgrade.yml
+      when: inventory_hostname == minor_orig_primary
+
+- name: Optional switch back to the original primary
+  hosts: pg_data
+  become: true
+  tasks:
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Switchover back
+      ansible.builtin.include_role:
+        name: repmgr
+        tasks_from: switchover.yml
+      when:
+        - minor_upgrade_switch_back | default(false) | bool
+        - inventory_hostname == minor_orig_primary
+
+- name: Finish
+  hosts: pg_cluster
+  become: true
+  tasks:
+    - name: Refresh topology
+      ansible.builtin.include_role:
+        name: pg_facts
+    - name: Update the repmgr extension
+      ansible.builtin.command: "{{ psql_cmd }} -d {{ repmgr_db }} -c 'ALTER EXTENSION repmgr UPDATE'"
+      become: true
+      become_user: postgres
+      changed_when: true
+      when: inventory_hostname == pg_current_primary
+    - name: Resume backups
+      ansible.builtin.file:
+        path: "{{ pgops_maintenance_flag }}"
+        state: absent
+
+- name: Verify
+  ansible.builtin.import_playbook: _verify_topology.yml

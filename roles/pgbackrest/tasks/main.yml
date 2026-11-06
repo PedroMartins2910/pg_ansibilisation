@@ -1,0 +1,82 @@
+---
+- name: Install pgBackRest
+  ansible.builtin.dnf:
+    name: "{{ pgbackrest_packages }}"
+    state: present
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: postgres
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/pgbackrest, owner: root, mode: "0750"}
+    - {path: "{{ pgbackrest_log_dir }}", owner: postgres, mode: "0750"}
+    - {path: "{{ pgbackrest_spool_dir }}", owner: postgres, mode: "0750"}
+    - {path: "{{ pgbackrest_state_dir }}", owner: postgres, mode: "0750"}
+
+- name: Configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Backup wrapper settings
+  ansible.builtin.template:
+    src: backup.env.j2
+    dest: "{{ pgops_conf_dir }}/backup.env"
+    owner: root
+    group: postgres
+    mode: "0640"
+
+- name: Backup wrapper
+  ansible.builtin.copy:
+    src: pg_backup.sh
+    dest: /usr/local/bin/pg_backup.sh
+    mode: "0755"
+
+- name: Daily backup (runs only where the node is a standby)
+  ansible.builtin.cron:
+    name: pg-ops pgbackrest backup
+    user: postgres
+    minute: "{{ backup_cron_minute }}"
+    hour: "{{ backup_cron_hour }}"
+    weekday: "{{ backup_cron_weekday }}"
+    job: "/usr/local/bin/pg_backup.sh >/dev/null 2>&1"
+
+- name: logrotate for pgBackRest logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/pgbackrest-pgops
+    mode: "0644"
+    content: |
+      {{ pgbackrest_log_dir }}/*.log {
+          weekly
+          rotate 8
+          compress
+          missingok
+          notifempty
+          copytruncate
+      }
+
+- name: Stanza and check on the primary
+  when: pg_node_role == 'primary'
+  block:
+    - name: Repository status
+      ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} --output=json info"
+      become: true
+      become_user: postgres
+      register: _pbr_info
+      changed_when: false
+
+    - name: stanza-create (repository has no stanza yet)
+      ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} stanza-create"
+      become: true
+      become_user: postgres
+      changed_when: true
+      when: (_pbr_info.stdout | from_json | first).status.code in [1, 3]
+
+    - name: pgbackrest check (S3 reachable + archive_command works)
+      ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} check"
+      become: true
+      become_user: postgres
+      changed_when: false
+      when: pgbackrest_run_check | bool
