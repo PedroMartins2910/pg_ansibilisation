@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "pgbackrest",
+      "credentials": [{"accessKey": "e2e-access", "secretKey": "e2e-secret-key-0123456789"}],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

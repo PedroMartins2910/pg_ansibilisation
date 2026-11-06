@@ -1,30 +1,18 @@
 ---
-- name: Socket directory {{ pg_socket_dir }} (recreated at boot)
-  ansible.builtin.copy:
-    dest: /etc/tmpfiles.d/pg-ops-postgresql.conf
-    content: "d {{ pg_socket_dir }} 0755 postgres postgres -\n"
-    mode: "0644"
-  register: _pg_tmpfiles
-
-- name: Create the socket directory now
-  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/pg-ops-postgresql.conf
-  changed_when: true
-  when: _pg_tmpfiles is changed
-
-- name: systemd unit {{ pg_service }}
-  ansible.builtin.template:
-    src: postgresql.service.j2
-    dest: "/etc/systemd/system/{{ pg_service }}.service"
-    mode: "0644"
-  register: _pg_unit
-
-- name: Remove the old PGDG drop-in (package-based installs)
+- name: Drop-in directory for {{ pg_service }}
   ansible.builtin.file:
-    path: "/etc/systemd/system/{{ pg_service }}.service.d/pg-ops.conf"
-    state: absent
+    path: "/etc/systemd/system/{{ pg_service }}.service.d"
+    state: directory
+    mode: "0755"
+
+- name: Pin PGDATA for {{ pg_service }}
+  ansible.builtin.template:
+    src: pgdata.conf.j2
+    dest: "/etc/systemd/system/{{ pg_service }}.service.d/pg-ops.conf"
+    mode: "0644"
   register: _pg_dropin
 
-- name: Reload systemd after unit change
+- name: Reload systemd after drop-in change
   ansible.builtin.systemd:
     daemon_reload: true
-  when: _pg_unit is changed or _pg_dropin is changed
+  when: _pg_dropin is changed

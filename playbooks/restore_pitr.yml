@@ -13,6 +13,7 @@
   ignore_unreachable: true
   roles:
     - pg_facts
+    - secrets          # repmgr password: the witness is re-registered at the end
   tasks:
     - name: Validate
       ansible.builtin.assert:
@@ -61,14 +62,18 @@
       become_user: postgres
       changed_when: true
 
+- name: Refresh topology on all nodes (not inside the serial play below)
+  hosts: pg_cluster
+  become: true
+  gather_facts: false
+  roles:
+    - pg_facts
+
 - name: Re-clone the other data nodes from the restored primary
   hosts: pg_data
   become: true
   serial: 1
   tasks:
-    - name: Refresh topology
-      ansible.builtin.include_role:
-        name: pg_facts
     - name: Rebuild
       ansible.builtin.include_role:
         name: repmgr

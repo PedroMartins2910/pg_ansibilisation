@@ -3,7 +3,7 @@
 # DOWNTIME: from "stop primary" until the new primary is started (usually 1-5 minutes,
 # independent of database size thanks to --link).
 #
-#   ansible-playbook ... playbooks/major_upgrade.yml -e pg_new_version_full=18.1 -e pgaudit_version=18.0 -e confirm=YES
+#   ansible-playbook ... playbooks/major_upgrade.yml -e pg_new_version_full=18.6 -e confirm=YES
 #   (preflight only, no downtime:  playbooks/major_upgrade_preflight.yml, same vars)
 #
 # BACKUPS: pgBackRest stanza-upgrade runs before the new primary starts; old-version
@@ -13,7 +13,7 @@
 # new path). Until you clean up, you can unmask postgresql-<old> on the standby and
 # promote it (losing writes made after the upgrade).
 #
-# AFTER SUCCESS: set pg_version_full: <new> (and pgaudit_version) in the inventory.
+# AFTER SUCCESS: set pg_version_full: <new> in the inventory.
 
 - name: Preflight (no downtime)
   ansible.builtin.import_playbook: major_upgrade_preflight.yml
@@ -194,7 +194,7 @@
     - name: Next steps
       ansible.builtin.debug:
         msg:
-          - "1. Set pg_version_full: {{ upg_new_version_full }} (and pgaudit_version) in the inventory NOW."
+          - "1. Set pg_version_full: {{ upg_new_version_full }} in the inventory NOW."
           - "2. Check the ANALYZE job on {{ upg_primary }} (async id {{ hostvars[upg_primary]._upg_analyze.ansible_job_id | default('-') }})."
-          - "3. When happy, delete old data: {{ pg_home_dir }}/delete_old_cluster.sh on {{ upg_primary }}, rm -rf {{ upg_old_data }} on the other nodes, rm -rf {{ upg_old_install_dir }} and its pgsql-{{ upg_old_version }} symlink."
+          - "3. When happy, delete old data: {{ pg_home_dir }}/delete_old_cluster.sh on {{ upg_primary }}, rm -rf {{ upg_old_data }} on the other nodes, remove postgresql{{ upg_old_version }}* packages."
       run_once: true

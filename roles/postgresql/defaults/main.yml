@@ -1,6 +1,27 @@
 ---
-# PostgreSQL itself is compiled by roles/pg_build; only runtime helpers come from dnf.
-pg_support_packages: [python3-psycopg2, tar, gzip]
+# Core packages pinned at pg_version_full (and version-locked, see tasks/packages.yml)
+pg_packages:
+  - "postgresql{{ pg_version }}-{{ pg_version_full }}"
+  - "postgresql{{ pg_version }}-libs-{{ pg_version_full }}"
+  - "postgresql{{ pg_version }}-server-{{ pg_version_full }}"
+  - "postgresql{{ pg_version }}-contrib-{{ pg_version_full }}"
+pg_versionlock: true
+pg_package_change_allowed: false      # true only inside minor_upgrade.yml
+# Extension packages: pgaudit + pgauditlogtofile always, repmgr when enabled (it is in
+# shared_preload_libraries, so it must exist before the first start), pgBackRest on data nodes
+# (restore_command calls it as soon as a standby starts), optional ones on request
+# (pgcrypto is part of -contrib, so it has no package of its own).
+# key = extension name (CREATE EXTENSION), value = PGDG package providing it
+pg_extension_package_map:
+  vector: "pgvector_{{ pg_version }}"
+pg_extension_packages: >-
+  {{ ['pgaudit_' ~ pg_version, 'pgauditlogtofile_' ~ pg_version]
+     + (['repmgr_' ~ pg_version] if repmgr_enabled | bool else [])
+     + (['pgbackrest'] if inventory_hostname in groups['pg_data'] else [])
+     + (pg_extensions_optional | map(attribute='name') | select('in', pg_extension_package_map)
+        | map('extract', pg_extension_package_map) | list) }}
+pg_extra_packages: []                 # e.g. ["pg_partman_{{ pg_version }}"] - rendered per version
+pg_support_packages: [python3-psycopg2, python3-dnf-plugin-versionlock, tar, gzip]
 
 # Only used for a brand-new cluster (never on an existing data directory)
 pg_initdb_options: "--data-checksums --encoding=UTF8 --locale=en_US.UTF-8 --auth-local=peer --auth-host=scram-sha-256"
@@ -11,7 +32,17 @@ pg_initial_primary: false
 pg_start_stopped_nodes: false
 
 pg_archive_mode: "on"                 # "always" also archives on standbys (double push)
-pg_shared_preload_libraries: "{{ (['repmgr'] if repmgr_enabled | bool else []) + ['pg_stat_statements'] }}"
+pg_shared_preload_libraries: "{{ (['repmgr'] if repmgr_enabled | bool else []) + ['pg_stat_statements', 'pgaudit', 'pgauditlogtofile'] }}"
+
+# pgaudit (what to audit) + pgauditlogtofile (audit lines go to their own file in pg_log_dir)
+pg_settings_audit:
+  pgaudit.log: "ddl,role"
+  pgaudit.log_catalog: "off"
+  pgaudit.log_parameter: "off"
+  pgaudit.log_relation: "on"
+  pgaudit.log_directory: "{{ pg_log_dir }}"
+  pgaudit.log_filename: "audit-%Y%m%d.log"
+  pgaudit.log_rotation_age: "1440"
 
 # conf.d/00-ansible.conf is included at the END of postgresql.conf, so it wins over
 # postgresql.conf (not over postgresql.auto.conf / ALTER SYSTEM).

@@ -1,5 +1,5 @@
 ---
-# repmgr is compiled into the PostgreSQL prefix by roles/pg_build (repmgr_version, all.yml).
+repmgr_packages: ["repmgr_{{ pg_version }}"]
 
 # Host vars (required): repmgr_node_id (unique int). Optional: repmgr_location, repmgr_priority.
 repmgr_location: default

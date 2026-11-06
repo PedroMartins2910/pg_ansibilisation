@@ -2,9 +2,7 @@
 # Major upgrade PREFLIGHT - no downtime, safe to run any time before the window:
 # installs the new version side by side, initdb's the new cluster on the primary and
 # runs pg_upgrade --check against the live old cluster.
-#   ansible-playbook ... playbooks/major_upgrade_preflight.yml -e pg_new_version_full=18.1 \
-#       -e pgaudit_version=18.0 -e confirm=YES     (pgaudit's major must match)
-# The new version is compiled from the S3 tarballs side by side (pgsql-<new major>).
+#   ansible-playbook ... playbooks/major_upgrade_preflight.yml -e pg_new_version_full=18.6 -e confirm=YES
 - name: Discover and validate
   hosts: pg_cluster
   become: true
@@ -30,9 +28,8 @@
         upg_old_version: "{{ pg_version | string }}"
         upg_new_version: "{{ (pg_new_version_full | string).split('.')[0] }}"
         upg_new_version_full: "{{ pg_new_version_full | string }}"
-        upg_old_install_dir: "{{ pg_install_dir }}"
-        upg_old_bin: "{{ pg_bin_dir }}"
-        upg_new_bin: "{{ pg_soft_root }}/pgsql-{{ (pg_new_version_full | string).split('.')[0] }}/bin"
+        upg_old_bin: "/usr/pgsql-{{ pg_version }}/bin"
+        upg_new_bin: "/usr/pgsql-{{ (pg_new_version_full | string).split('.')[0] }}/bin"
         upg_old_data: "{{ pg_data_dir }}"
         upg_new_data: "{{ pg_data_dir_template | replace('{version}', (pg_new_version_full | string).split('.')[0]) }}"
         upg_old_service: "{{ pg_service }}"
@@ -40,23 +37,29 @@
         upg_primary: "{{ pg_current_primary }}"
 
 # ---------------------------------------------------------------- preflight (no downtime)
-- name: "Preflight: build the new version side by side"
+- name: "Preflight: install the new version side by side"
   hosts: pg_cluster
   become: true
+  vars:
+    pg_repo_versions: ["{{ upg_old_version }}", "{{ upg_new_version }}"]
   tasks:
-    - name: PostgreSQL + extensions (new version)
+    - name: Repositories
       ansible.builtin.include_role:
-        name: pg_build
+        name: pg_repo
+    - name: PostgreSQL packages (new version)
+      ansible.builtin.include_role:
+        name: postgresql
+        tasks_from: packages.yml
       vars:
-        pg_version_full: "{{ upg_new_version_full }}"
         pg_version: "{{ upg_new_version }}"
-    - name: repmgr unit (new version)
+        pg_version_full: "{{ upg_new_version_full }}"
+    - name: repmgr packages (new version)
       ansible.builtin.include_role:
         name: repmgr
-        tasks_from: install.yml
+        tasks_from: packages.yml
       vars:
-        pg_version_full: "{{ upg_new_version_full }}"
         pg_version: "{{ upg_new_version }}"
+        pg_version_full: "{{ upg_new_version_full }}"
 
 - name: "Preflight: new cluster + pg_upgrade --check on the primary"
   hosts: pg_data

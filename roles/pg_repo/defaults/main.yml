@@ -2,9 +2,10 @@
 pg_repo_manage: true
 # Override with your internal mirror if needed (same directory layout as PGDG)
 pg_repo_base_url: "https://download.postgresql.org/pub/repos/yum"
-pg_repo_gpg_key_url: "https://download.postgresql.org/pub/repos/yum/keys/PGDG-RPM-GPG-KEY-RHEL"
+# PGDG signs aarch64 packages with a different key
+pg_repo_gpg_key_url: "https://download.postgresql.org/pub/repos/yum/keys/PGDG-RPM-GPG-KEY-{{ 'AARCH64-RHEL' if ansible_architecture == 'aarch64' else 'RHEL' }}"
 pg_repo_gpgcheck: true
-pg_repo_versions: []               # PostgreSQL is compiled from source; only pgdg-common (pgBadger) is needed
+pg_repo_versions: ["{{ pg_version }}"]
 pg_repo_common_enabled: true          # pgbadger and other tools
 pg_repo_arch_path: "redhat/rhel-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}"
 

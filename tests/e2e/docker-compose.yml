@@ -1,0 +1,59 @@
+# End-to-end test bed (see run.sh). Containers stand in for RHEL 9 VMs (systemd as PID 1).
+name: pgops-e2e
+
+x-node: &node
+  image: pgops-e2e-el9
+  privileged: true
+  cgroup: host
+  volumes:
+    - /sys/fs/cgroup:/sys/fs/cgroup:rw
+
+services:
+  pg1:
+    <<: *node
+    container_name: pgops-e2e-pg1
+    hostname: pg1
+    networks: {e2e: {ipv4_address: 172.30.0.11}}
+  pg2:
+    <<: *node
+    container_name: pgops-e2e-pg2
+    hostname: pg2
+    networks: {e2e: {ipv4_address: 172.30.0.12}}
+  wit:
+    <<: *node
+    container_name: pgops-e2e-wit
+    hostname: wit
+    networks: {e2e: {ipv4_address: 172.30.0.13}}
+  solo:
+    <<: *node
+    container_name: pgops-e2e-solo
+    hostname: solo
+    networks: {e2e: {ipv4_address: 172.30.0.14}}
+
+  # Fake S3 for pgBackRest: SeaweedFS, HTTPS on 9000 with a test CA (work/certs)
+  s3:
+    image: chrislusf/seaweedfs:4.50
+    container_name: pgops-e2e-s3
+    command: >-
+      server -master.telemetry=false -dir=/data -s3 -s3.port=8333 -s3.port.https=9000
+      -s3.cert.file=/certs/s3.crt -s3.key.file=/certs/s3.key
+      -s3.config=/etc/seaweedfs/s3.json
+    volumes:
+      - ./work/certs:/certs:ro
+      - ./s3.json:/etc/seaweedfs/s3.json:ro
+    networks: {e2e: {ipv4_address: 172.30.0.20}}
+
+  # HashiCorp Vault (dev server, in-memory). The controller reaches it on 127.0.0.1:18200.
+  vault:
+    image: hashicorp/vault:1.20
+    container_name: pgops-e2e-vault
+    command: server -dev -dev-root-token-id=e2e-root -dev-listen-address=0.0.0.0:8200
+    cap_add: [IPC_LOCK]
+    ports: ["127.0.0.1:18200:8200"]
+    networks: {e2e: {ipv4_address: 172.30.0.30}}
+
+networks:
+  e2e:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

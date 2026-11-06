@@ -5,8 +5,8 @@
     name: "{{ repmgr_user }}"
     password: "{{ repmgr_password }}"
     role_attr_flags: LOGIN,SUPERUSER,REPLICATION
-    update_password: "{{ repmgr_update_password }}"
-    port: "{{ pg_port }}"
+    no_password_changes: "{{ repmgr_update_password == 'on_create' }}"   # on_create | always
+    login_port: "{{ pg_port }}"
     login_unix_socket: "{{ pg_socket_dir }}"
   become: true
   become_user: postgres
@@ -16,7 +16,7 @@
   community.postgresql.postgresql_db:
     name: "{{ repmgr_db }}"
     owner: "{{ repmgr_user }}"
-    port: "{{ pg_port }}"
+    login_port: "{{ pg_port }}"
     login_unix_socket: "{{ pg_socket_dir }}"
   become: true
   become_user: postgres

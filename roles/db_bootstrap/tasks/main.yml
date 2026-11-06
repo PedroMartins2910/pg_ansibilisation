@@ -23,7 +23,7 @@
   block:
     - name: Optional postgres superuser password
       community.postgresql.postgresql_user:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         name: postgres
         password: "{{ pg_postgres_password }}"
@@ -32,7 +32,7 @@
 
     - name: Group roles (NOLOGIN)
       community.postgresql.postgresql_user:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         name: "{{ item }}"
         role_attr_flags: NOLOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,INHERIT
@@ -40,7 +40,7 @@
 
     - name: dml inherits ro
       community.postgresql.postgresql_membership:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         groups: ["{{ pg_role_ro_name }}"]
         target_roles: ["{{ pg_role_dml_name }}"]
@@ -48,7 +48,7 @@
 
     - name: ddl inherits dml
       community.postgresql.postgresql_membership:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         groups: ["{{ pg_role_dml_name }}"]
         target_roles: ["{{ pg_role_ddl_name }}"]
@@ -56,7 +56,7 @@
 
     - name: Database {{ pg_db_name }}
       community.postgresql.postgresql_db:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         name: "{{ pg_db_name }}"
         owner: "{{ pg_db_owner }}"
@@ -64,9 +64,9 @@
 
     - name: Revoke everything on the database from PUBLIC
       community.postgresql.postgresql_privs:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         type: database
         objs: "{{ pg_db_name }}"
         privs: ALL
@@ -75,9 +75,9 @@
 
     - name: CONNECT / TEMP for the ro group (inherited by dml and ddl)
       community.postgresql.postgresql_privs:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         type: database
         objs: "{{ pg_db_name }}"
         privs: CONNECT,TEMPORARY
@@ -85,17 +85,17 @@
 
     - name: Schema {{ pg_schema_name }} owned by the ddl group
       community.postgresql.postgresql_schema:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         name: "{{ pg_schema_name }}"
         owner: "{{ pg_role_ddl_name }}"
 
     - name: No CREATE on schema public
       community.postgresql.postgresql_privs:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         type: schema
         objs: public
         privs: CREATE
@@ -104,9 +104,9 @@
 
     - name: USAGE on the schema for ro
       community.postgresql.postgresql_privs:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         type: schema
         objs: "{{ pg_schema_name }}"
         privs: USAGE
@@ -114,9 +114,9 @@
 
     - name: Privileges on existing objects
       community.postgresql.postgresql_privs:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         schema: "{{ pg_schema_name }}"
         type: "{{ item.type }}"
         objs: ALL_IN_SCHEMA
@@ -131,9 +131,9 @@
 
     - name: Default privileges for objects created by the ddl group
       community.postgresql.postgresql_privs:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
-        database: "{{ pg_db_name }}"
+        login_db: "{{ pg_db_name }}"
         schema: "{{ pg_schema_name }}"
         type: default_privs
         target_roles: "{{ pg_role_ddl_name }}"
@@ -149,13 +149,13 @@
 
     - name: Login users
       community.postgresql.postgresql_user:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         name: "{{ item.name }}"
         password: "{{ pg_login_passwords[item.name] }}"
         role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,INHERIT
         conn_limit: "{{ item.conn_limit | default(omit) }}"
-        update_password: "{{ pg_login_update_password }}"
+        no_password_changes: "{{ pg_login_update_password == 'on_create' }}"   # on_create | always
       loop: "{{ pg_login_users }}"
       loop_control:
         label: "{{ item.name }}"
@@ -163,7 +163,7 @@
 
     - name: Group membership of login users
       community.postgresql.postgresql_membership:
-        port: "{{ pg_port }}"
+        login_port: "{{ pg_port }}"
         login_unix_socket: "{{ pg_socket_dir }}"
         groups: ["{{ _dbb_roles[item.group] }}"]
         target_roles: ["{{ item.name }}"]
@@ -203,3 +203,27 @@
         label: "{{ item.name }}"
       changed_when: true
       when: ('role=' ~ pg_role_ddl_name) not in (_dbb_cfg[item.name] | default('')).split(';')
+
+- name: Default extensions in {{ pg_db_name }} and template1 (new databases inherit them)
+  community.postgresql.postgresql_ext:
+    login_port: "{{ pg_port }}"
+    login_unix_socket: "{{ pg_socket_dir }}"
+    login_db: "{{ item.0 }}"
+    name: "{{ item.1 }}"
+  become: true
+  become_user: postgres
+  loop: "{{ [pg_db_name, 'template1'] | product(pg_extensions_default) | list }}"
+  loop_control:
+    label: "{{ item.0 }}.{{ item.1 }}"
+
+- name: Optional extensions on request (pg_extensions_optional)
+  community.postgresql.postgresql_ext:
+    login_port: "{{ pg_port }}"
+    login_unix_socket: "{{ pg_socket_dir }}"
+    login_db: "{{ item.db }}"
+    name: "{{ item.name }}"
+  become: true
+  become_user: postgres
+  loop: "{{ pg_extensions_optional }}"
+  loop_control:
+    label: "{{ item.db }}.{{ item.name }}"

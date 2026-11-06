@@ -1,7 +1,6 @@
 ---
 # Rolling minor upgrade (e.g. 17.10 -> 17.11). Client impact: ONE switchover reconnect.
-# Set pg_version_full (and extension versions if needed) in the inventory first; the new
-# version is compiled from the S3 tarballs into a new prefix and pgsql-<major> is switched.
+# Set pg_version_full in the inventory first (or pass -e pg_version_full=17.11).
 #   1. witness   2. standby   3. switchover to the upgraded standby   4. old primary
 #   5. optional switch back (-e minor_upgrade_switch_back=true)
 #   ansible-playbook ... playbooks/minor_upgrade.yml -e confirm=YES
@@ -65,14 +64,20 @@
         tasks_from: switchover.yml
       when: inventory_hostname == minor_new_primary
 
+# Topology must be refreshed on ALL nodes at once: inside a serial play pg_facts would only
+# see the batch host's new state and the other nodes' stale facts (no primary found).
+- name: Refresh topology after the switchover
+  hosts: pg_cluster
+  become: true
+  gather_facts: false
+  roles:
+    - pg_facts
+
 - name: Upgrade the old primary (now a standby)
   hosts: pg_data
   become: true
   serial: 1
   tasks:
-    - name: Refresh topology
-      ansible.builtin.include_role:
-        name: pg_facts
     - name: Minor upgrade
       ansible.builtin.include_role:
         name: repmgr

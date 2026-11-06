@@ -4,87 +4,53 @@
 # (NOT in inventory group_vars/all: that has LOWER precedence than this file).
 
 pg_cluster_name: pgcluster
-# Full PostgreSQL version, compiled from postgresql-<pg_version_full>.tar.gz (see pg_artifacts).
-# pg_version (the major) is derived from it: paths, service and repmgr names use the major.
+# Exact PostgreSQL version installed from the PGDG repository (Nexus mirror, see
+# roles/pg_repo). pg_version (the major) is derived from it: package, path, service and
+# repmgr names use the major. Changing pg_version_full on a running cluster does nothing
+# until playbooks/minor_upgrade.yml runs (packages are version-locked).
 pg_version_full: "17.11"
 pg_version: "{{ (pg_version_full | string).split('.')[0] }}"
 pg_port: 5432
 
 # ---------------------------------------------------------------- filesystem layout
-#   regular : standard FHS paths (/usr/local, /var/lib/pgsql, /var/log/...)
-#   custom  : everything under the pkage prefix (e.g. /PKfbgad1):
-#             <pkage>/soft (binaries + certs), <pkage>/data/pgs, <pkage>/log/<component>
+# Binaries always come from the PGDG RPMs (/usr/pgsql-<major>). Data, logs and certificates:
+#   regular : standard paths (/var/lib/pgsql, /var/log/<component>, /etc/pki/pgsql)
+#   custom  : under the pkage prefix (e.g. /PKfbgad1):
+#             <pkage>/data/pgs, <pkage>/log/<component>, <pkage>/soft/<host>.jks
 # Every path below can still be overridden per host.
 pg_fs_layout: regular
 pkage: ""
 pg_fs_layouts:
   regular:
-    soft: /usr/local
     data: /var/lib/pgsql
     log: /var/log
     pg_log: /var/log/postgresql
     certs: /etc/pki/pgsql
   custom:
-    soft: "{{ pkage }}/soft"
     data: "{{ pkage }}/data/pgs"
     log: "{{ pkage }}/log"
     pg_log: "{{ pkage }}/log/pgs"
     certs: "{{ pkage }}/soft/{{ ansible_hostname | default(inventory_hostname_short) }}.jks"
-pg_soft_root: "{{ pg_fs_layouts[pg_fs_layout].soft }}"
 pg_log_root: "{{ pg_fs_layouts[pg_fs_layout].log }}"
 pg_log_dir: "{{ pg_fs_layouts[pg_fs_layout].pg_log }}"
 pg_cert_dir: "{{ pg_fs_layouts[pg_fs_layout].certs }}"
 
-# Binaries: one prefix per FULL version, plus a per-MAJOR symlink that every tool uses
-# (minor upgrade = build new prefix + switch the symlink + restart).
-pg_install_dir: "{{ pg_soft_root }}/pgsql-{{ pg_version_full }}"
-pg_install_link: "{{ pg_soft_root }}/pgsql-{{ pg_version }}"
-pg_bin_dir: "{{ pg_install_link }}/bin"
 # "{version}" (major) is substituted so that the major upgrade can compute old and new locations.
 pg_data_dir_template: "{{ pg_fs_layouts[pg_fs_layout].data }}/{version}/data"
 pg_data_dir: "{{ pg_data_dir_template | replace('{version}', pg_version | string) }}"
+pg_bin_dir: "/usr/pgsql-{{ pg_version }}/bin"
 pg_service: "postgresql-{{ pg_version }}"
-pg_home_dir: /var/lib/pgsql          # home of the postgres OS user (created if missing)
-pg_socket_dir: /run/postgresql       # compiled in as the default socket directory
+pg_home_dir: /var/lib/pgsql          # home of the postgres OS user (created by the RPM)
+pg_socket_dir: /run/postgresql
+pgbackrest_bin: /usr/bin/pgbackrest
 
-# pgBackRest is compiled from the S3 bucket as well (data nodes only)
-pgbackrest_version: "2.54.2"
-pgbackrest_install_dir: "{{ pg_soft_root }}/pgbackrest-{{ pgbackrest_version }}"
-pgbackrest_bin: /usr/bin/pgbackrest  # symlink to the active build (in sudo's secure_path)
-
-# ---------------------------------------------------------------- build artifacts (S3)
-# Tarballs are fetched ONCE on the controller (cache dir), then copied to the hosts.
-#   s3    : amazon.aws.s3_object from pg_artifacts_s3_* (needs boto3 on the controller;
-#           credentials from Vault <base>/artifacts_s3, keys access_key / secret_key)
-#   local : files already present in pg_artifacts_local_dir on the controller (lab)
-pg_artifacts_source: s3
-pg_artifacts_s3_endpoint_url: "https://s3.example.internal"
-pg_artifacts_s3_bucket: pg-artifacts
-pg_artifacts_s3_prefix: ""           # e.g. "postgres/" (keep the trailing slash)
-pg_artifacts_s3_region: us-east-1
-pg_artifacts_s3_validate_certs: true
-pg_artifacts_s3_ca_bundle: ""        # PEM of a private CA on the controller ("" = system trust)
-pg_artifacts_local_dir: "{{ playbook_dir }}/../artifacts"
-pg_artifacts_cache_dir: "{{ playbook_dir }}/../.artifacts-cache"
-
-# Extension versions (pgaudit's major must match the PostgreSQL major)
-pgaudit_version: "17.1"
-pgauditlogtofile_version: "1.6.4"
-repmgr_version: "5.5.0"
-pgvector_version: "0.8.0"
-
-# Object name of each tarball in the bucket (and optional sha256 to verify it).
-pg_artifacts:
-  postgresql: {file: "postgresql-{{ pg_version_full }}.tar.gz", sha256: ""}
-  pgaudit: {file: "pgaudit-{{ pgaudit_version }}.tar.gz", sha256: ""}
-  pgauditlogtofile: {file: "pgauditlogtofile-{{ pgauditlogtofile_version }}.tar.gz", sha256: ""}
-  repmgr: {file: "repmgr-{{ repmgr_version }}.tar.gz", sha256: ""}
-  pgvector: {file: "pgvector-{{ pgvector_version }}.tar.gz", sha256: ""}
-  pgbackrest: {file: "pgbackrest-{{ pgbackrest_version }}.tar.gz", sha256: ""}
-
-# Optional extensions, built and created only on request, e.g.
-#   [{name: pgvector, db: appdb}, {name: pgcrypto, db: appdb}]   (pgcrypto ships with contrib)
+# Extensions (PGDG packages <name>_<major>). pgaudit + pgauditlogtofile are always
+# installed and preloaded; pgcrypto ships with -contrib.
+# Optional, created only on request:  [{name: vector, db: appdb}, {name: pgcrypto, db: appdb}]
+# (vector = pgvector; its package is installed automatically, see pg_extension_package_map)
 pg_extensions_optional: []
+# Created in the application database and template1 (new databases inherit them)
+pg_extensions_default: [pgaudit, pgauditlogtofile, pg_stat_statements]
 
 # IP that the other nodes use to reach this node (pg_hba, repmgr conninfo, pgBackRest).
 pg_node_ip: "{{ ansible_default_ipv4.address }}"

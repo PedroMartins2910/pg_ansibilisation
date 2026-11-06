@@ -1,0 +1,5 @@
+---
+# Test-only collections (on top of ../../requirements.yml)
+collections:
+  - name: community.docker
+    version: ">=3.10.0"

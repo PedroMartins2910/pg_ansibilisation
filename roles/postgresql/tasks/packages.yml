@@ -1,0 +1,65 @@
+---
+# PostgreSQL {{ pg_version_full }} from the PGDG repository (Nexus mirror).
+# The core packages are installed at exactly pg_version_full and version-locked, so
+# neither `dnf update` nor a converge moves a running node to another minor version:
+# only minor_upgrade.yml (pg_package_change_allowed=true) does that.
+- name: Installed PostgreSQL {{ pg_version }} server version
+  ansible.builtin.command: rpm -q --qf '%{VERSION}' postgresql{{ pg_version }}-server
+  register: _pg_rpm
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether the core packages may be installed / changed
+  ansible.builtin.set_fact:
+    _pg_installed_version: "{{ _pg_rpm.stdout if _pg_rpm.rc == 0 else '' }}"
+    _pg_pkg_ok: >-
+      {{ _pg_rpm.rc != 0 or _pg_rpm.stdout == (pg_version_full | string)
+         or pg_package_change_allowed | bool }}
+
+- name: Version change postponed
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} runs PostgreSQL {{ _pg_installed_version }} but pg_version_full is
+      {{ pg_version_full }}. Nothing changed here: run playbooks/minor_upgrade.yml (one switchover).
+  when: not _pg_pkg_ok
+
+- name: versionlock plugin and runtime helpers
+  ansible.builtin.dnf:
+    name: "{{ pg_support_packages }}"
+    state: present
+
+- name: Release the version lock (version change)
+  ansible.builtin.command: dnf -q versionlock delete 'postgresql{{ pg_version }}*'
+  changed_when: true
+  failed_when: false
+  when:
+    - _pg_pkg_ok
+    - _pg_installed_version not in ['', pg_version_full | string]
+
+- name: Install PostgreSQL {{ pg_version_full }}
+  ansible.builtin.dnf:
+    name: "{{ pg_packages }}"
+    state: present
+  register: pg_core_packages
+  when: _pg_pkg_ok
+
+- name: Extensions and extra packages
+  ansible.builtin.dnf:
+    name: "{{ pg_extension_packages + pg_extra_packages }}"
+    state: present
+
+- name: Current version locks
+  ansible.builtin.command: dnf -q versionlock list
+  register: _pg_locks
+  changed_when: false
+  when: pg_versionlock | bool
+
+- name: Lock the PostgreSQL {{ pg_version }} core packages at the installed version
+  ansible.builtin.shell: >-
+    dnf -q versionlock delete 'postgresql{{ pg_version }}*' >/dev/null 2>&1;
+    dnf -q versionlock add {{ pg_packages | map('regex_replace', '-' ~ (pg_version_full | string | regex_escape) ~ '$', '') | join(' ') }}
+  changed_when: true
+  when:
+    - pg_versionlock | bool
+    - _pg_pkg_ok
+    - ('postgresql' ~ pg_version ~ '-server-0:' ~ pg_version_full ~ '-') not in _pg_locks.stdout

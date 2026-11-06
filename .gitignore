@@ -1,5 +1,3 @@
 *.retry
 .vagrant/
 __pycache__/
-artifacts/
-.artifacts-cache/

@@ -10,17 +10,22 @@
     name: "{{ repmgr_service }}"
     state: stopped
 
-- name: Build PostgreSQL {{ pg_version_full }} + extensions and switch {{ pg_install_link }}
+- name: PostgreSQL {{ pg_version_full }} packages (lock released and re-applied)
   ansible.builtin.include_role:
-    name: pg_build
+    name: postgresql
+    tasks_from: packages.yml
   vars:
-    pg_build_allow_switch: true
+    pg_package_change_allowed: true
 
-- name: Build pgBackRest {{ pgbackrest_version }} (data nodes)
-  ansible.builtin.include_role:
-    name: pg_build
-    tasks_from: pgbackrest.yml
-  when: inventory_hostname in groups['pg_data']
+- name: Update repmgr, extensions and pgBackRest to the latest build for this major
+  ansible.builtin.dnf:
+    name:
+      - "repmgr_{{ pg_version }}"
+      - "pgaudit_{{ pg_version }}"
+      - "pgauditlogtofile_{{ pg_version }}"
+      - pgbackrest            # updated only where installed (update_only)
+    state: latest
+    update_only: true
 
 - name: Installed server version
   ansible.builtin.command: "{{ pg_bin_dir }}/postgres -V"

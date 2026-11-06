@@ -1,21 +1,15 @@
 ---
 pg_cluster_name: billing
 pg_version_full: "17.11"
-# pg_repo_base_url: https://mirror.internal/pgdg   # only used for pgBadger now
+# Nexus yum proxy/hosted repositories (same layout as download.postgresql.org)
+pg_repo_base_url: https://nexus.corp.internal/repository/pgdg-yum
+pg_repo_gpg_key_url: "https://nexus.corp.internal/repository/pgdg-keys/PGDG-RPM-GPG-KEY-{{ 'AARCH64-RHEL' if ansible_architecture == 'aarch64' else 'RHEL' }}"
+pg_repo_epel_baseurl: "https://nexus.corp.internal/repository/epel/{{ ansible_distribution_major_version }}/Everything/{{ ansible_architecture }}/"
+pg_repo_epel_gpg_key_url: "https://nexus.corp.internal/repository/epel-keys/RPM-GPG-KEY-EPEL-{{ ansible_distribution_major_version }}"
 
-# Filesystem: regular (FHS) or custom (everything under pkage)
+# Filesystem: regular or custom (data, logs, certs under pkage)
 pg_fs_layout: custom
 pkage: /PKbilling01
-
-# Build artifacts (tarballs) in S3; credentials in Vault <base>/artifacts_s3
-pg_artifacts_s3_endpoint_url: https://s3.storage.internal
-pg_artifacts_s3_bucket: pg-artifacts
-pg_artifacts_s3_prefix: "postgres/"
-pg_artifacts_s3_ca_bundle: "{{ inventory_dir }}/files/s3-ca.pem"
-pgaudit_version: "17.1"
-pgauditlogtofile_version: "1.6.4"
-repmgr_version: "5.5.0"
-pgbackrest_version: "2.54.2"
 
 # Application database: schema has the same name
 pg_db_name: billing

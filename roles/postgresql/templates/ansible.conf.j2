@@ -2,6 +2,7 @@
 # Included from postgresql.conf via include_dir = 'conf.d'.
 {% set s = pg_settings_base
            | combine(pg_settings_logging)
+           | combine(pg_settings_audit)
            | combine({'shared_preload_libraries': pg_shared_preload_libraries | join(',')})
            | combine(pg_settings_extra) %}
 {% if inventory_hostname in (groups['pg_witness'] | default([])) %}

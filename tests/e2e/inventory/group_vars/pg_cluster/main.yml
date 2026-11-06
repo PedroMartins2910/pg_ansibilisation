@@ -1,0 +1,42 @@
+---
+pg_cluster_name: e2e
+# pg_version_full is written by run.sh into zz_version.yml (17.10 -> 17.11 -> 18.x)
+# download.postgresql.org stands in for the Nexus mirror (pg_repo_base_url)
+
+pg_fs_layout: custom
+pkage: /PKe2e01
+
+pg_db_name: e2edb
+pg_role_ro_name: e2e_ro
+pg_role_dml_name: e2e_dml
+pg_role_ddl_name: e2e_ddl
+pg_login_users:
+  - {name: e2e_app, group: dml}
+  - {name: e2e_read, group: ro}
+  - {name: e2e_owner, group: ddl}
+pg_hba_app_cidrs: [172.30.0.0/24]
+pg_extensions_optional:
+  - {name: vector, db: e2edb}
+  - {name: pgcrypto, db: e2edb}
+pg_settings_extra:
+  shared_buffers: 128MB
+
+# Secrets from HashiCorp Vault (KV v2 'secret', AppRole) - seeded by run.sh under
+# secret/postgres/e2e/...; role_id / secret_id come from the environment.
+secrets_backend: hashi_vault
+hashi_vault_url: http://127.0.0.1:18200
+hashi_vault_auth_method: approle
+
+# pgBackRest -> SeaweedFS (HTTPS, test CA)
+pgbackrest_s3_endpoint: 172.30.0.20
+pgbackrest_s3_port: 9000
+pgbackrest_s3_bucket: pgbackrest
+pgbackrest_s3_region: us-east-1
+pgbackrest_s3_verify_tls: true
+pgbackrest_s3_ca_cert_src: "{{ inventory_dir }}/../work/certs/ca.crt"
+pgbackrest_retention_full: 3
+pgbackrest_process_max: 2
+
+# Faster failover for the test
+repmgr_reconnect_attempts: 3
+repmgr_reconnect_interval: 3

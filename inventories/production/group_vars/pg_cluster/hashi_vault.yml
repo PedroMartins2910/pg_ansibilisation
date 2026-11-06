@@ -10,5 +10,4 @@ hashi_vault_base_path: "postgres/{{ pg_cluster_name }}"
 #   secret/postgres/billing/users/billing_report
 #   secret/postgres/billing/users/billing_migrate
 #   secret/postgres/billing/pgbackrest_s3       (keys: access_key, secret_key)
-#   secret/postgres/billing/artifacts_s3        (keys: access_key, secret_key - build tarballs bucket)
 #   secret/postgres/billing/pgbackrest_cipher   (key "password", only if pgbackrest_encrypt: true)

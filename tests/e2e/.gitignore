@@ -1,0 +1,4 @@
+work/
+inventory/group_vars/pg_cluster/zz_version.yml
+logs/
+logs-run-all.txt

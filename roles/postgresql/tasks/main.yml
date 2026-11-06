@@ -1,9 +1,6 @@
 ---
-# Binaries are compiled by roles/pg_build (runs before this role).
-- name: Runtime packages
-  ansible.builtin.dnf:
-    name: "{{ pg_support_packages }}"
-    state: present
+- name: Install packages
+  ansible.builtin.import_tasks: packages.yml
 
 - name: pg-ops directories
   ansible.builtin.file:
@@ -25,7 +22,7 @@
     group: postgres
     mode: "0640"
 
-- name: systemd unit and socket directory
+- name: systemd drop-in pinning PGDATA
   ansible.builtin.import_tasks: systemd.yml
 
 - name: Initialise a new cluster (greenfield primary or witness only)

@@ -4,8 +4,9 @@
 # pg1 = local instance, pg2 = peer (over SSH as postgres) so a backup started on
 # the standby copies files from the standby (backup-standby) and only talks to
 # the primary for start/stop backup.
-# pgbackrest_stanza, pgbackrest_encrypt and the version/paths live in playbooks/group_vars/all.yml;
-# the binary is compiled from the S3 tarball by roles/pg_build (tasks pgbackrest.yml).
+# pgbackrest_stanza and pgbackrest_encrypt live in playbooks/group_vars/all.yml.
+
+pgbackrest_packages: [pgbackrest]
 
 pgbackrest_conf: /etc/pgbackrest/pgbackrest.conf
 pgbackrest_log_dir: "{{ pg_log_root }}/pgbackrest"

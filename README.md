@@ -1,4 +1,4 @@
-# pg-ops — PostgreSQL (compiled from source) + repmgr HA, operated from Ansible
+# pg-ops — PostgreSQL + repmgr HA, operated from Ansible
 
 Topology: **2 data nodes + 1 repmgr witness**, repmgrd **automatic failover**. There is
 no VIP: applications list every data node in their connection string
@@ -9,14 +9,17 @@ witness) for applications that do not need HA. Backups use
 daily full backups taken from the standby, continuous WAL archiving, and retention by
 count. Secrets come from **HashiCorp Vault**.
 
-Target OS: RHEL / Rocky / Alma 8–9. PostgreSQL, its extensions (pgaudit,
-pgauditlogtofile, repmgr, optional pgvector; pgcrypto ships with contrib) and pgBackRest
-are **compiled from tarballs kept in an S3 bucket** (see *Build artifacts* below).
+Target OS: RHEL / Rocky / Alma 8–9 (x86_64 and aarch64). PostgreSQL, its extensions
+(pgaudit, pgauditlogtofile, repmgr, optional pgvector; pgcrypto ships with -contrib) and
+pgBackRest are **PGDG RPMs served by the Nexus yum mirror** (`pg_repo_base_url`), installed
+at exactly `pg_version_full` and version-locked.
+
+Tested end to end on local Docker (`tests/e2e/run.sh`, see *End-to-end test* below).
 
 ## Quick start
 
 ```bash
-pip install ansible-core hvac boto3      # hvac = Vault lookups, boto3 = S3 artifact download
+pip install ansible-core hvac            # hvac = HashiCorp Vault client used by the lookups
 ansible-galaxy collection install -r requirements.yml
 
 export VAULT_TOKEN=...                   # or ANSIBLE_HASHI_VAULT_ROLE_ID / ANSIBLE_HASHI_VAULT_SECRET_ID (approle)
@@ -39,8 +42,8 @@ ansible-playbook -i $INV playbooks/site.yml
 | Old primary back as standby | `rejoin.yml -e target=pgdb01 -e confirm=YES` | none |
 | Rebuild a replica | `rebuild_replica.yml -e target=pgdb02 -e confirm=YES` | none (HA reduced while cloning) |
 | Minor upgrade (17.x → 17.y) | set `pg_version_full`, then `minor_upgrade.yml -e confirm=YES` | one switchover reconnect |
-| Major upgrade preflight | `major_upgrade_preflight.yml -e pg_new_version_full=18.1 -e pgaudit_version=18.0 -e confirm=YES` | none |
-| Major upgrade | `major_upgrade.yml -e pg_new_version_full=18.1 -e pgaudit_version=18.0 -e confirm=YES` | **downtime 1–5 min** |
+| Major upgrade preflight | `major_upgrade_preflight.yml -e pg_new_version_full=18.6 -e confirm=YES` | none |
+| Major upgrade | `major_upgrade.yml -e pg_new_version_full=18.6 -e confirm=YES` | **downtime 1–5 min** |
 | Backup now | `backup_now.yml` (`-e backup_now_type=diff`, `-e force_on=<host>`) | none |
 | Point-in-time restore | `restore_pitr.yml -e target=pgdb01 [-e "restore_target_time='2026-11-05 10:30:00+01'"] [-e restore_set=<label>] -e confirm=YES` | full outage |
 
@@ -78,7 +81,7 @@ falls back to a full re-clone if the rewind fails.
      witness, and switches pgBackRest and pgBadger to the new paths;
    - pgBackRest `stanza-upgrade` already ran before the new primary started; a fresh
      full backup is taken because the new cluster has a **new system identifier**.
-4. Set `pg_version_full: <new>` (and `pgaudit_version`) in the inventory.
+4. Set `pg_version_full: <new>` in the inventory.
 5. When you're satisfied, clean up the old data (`delete_old_cluster.sh` on the primary,
    the old data directory on the other nodes).
 
@@ -87,42 +90,32 @@ falls back to a full re-clone if the rewind fails.
 
 ## Filesystem layout (`pg_fs_layout`)
 
-| Path | `regular` | `custom` (`pkage=/PKfbgad1`) |
+Binaries always come from the RPMs (`/usr/pgsql-<major>`, `/usr/bin/pgbackrest`).
+
+| Path | `regular` | `custom` (`pkage: /PKfbgad1`) |
 |---|---|---|
-| binaries (per full version) | `/usr/local/pgsql-17.11` | `/PKfbgad1/soft/pgsql-17.11` |
-| active binaries (symlink per major) | `/usr/local/pgsql-17` | `/PKfbgad1/soft/pgsql-17` |
 | data | `/var/lib/pgsql/17/data` | `/PKfbgad1/data/pgs/17/data` |
-| PostgreSQL logs | `/var/log/postgresql` | `/PKfbgad1/log/pgs` |
+| PostgreSQL + pgaudit logs | `/var/log/postgresql` | `/PKfbgad1/log/pgs` |
 | repmgr / pgBackRest / pg-ops logs | `/var/log/{repmgr,pgbackrest,pg-ops}` | `/PKfbgad1/log/{repmgr,pgbackrest,pg-ops}` |
 | certificates (TLS, coming next) | `/etc/pki/pgsql` | `/PKfbgad1/soft/<host>.jks` |
-| pgBackRest | `/usr/local/pgbackrest-<ver>` → `/usr/bin/pgbackrest` | `/PKfbgad1/soft/pgbackrest-<ver>` → `/usr/bin/pgbackrest` |
 
-Any of these can be overridden per host (`pg_install_dir`, `pg_data_dir_template`, `pg_log_dir`, ...).
+Any of these can be overridden per host (`pg_data_dir_template`, `pg_log_dir`, ...).
 
-## Build artifacts (S3)
+## Packages (Nexus) and versions
 
-`roles/pg_build` downloads each tarball **once on the controller** (`.artifacts-cache/`),
-copies it to the hosts and compiles it. A marker file in each prefix makes re-runs no-ops.
-The object names are vars in `pg_artifacts` (`playbooks/group_vars/all.yml`), built from
-the version vars:
+`roles/pg_repo` points dnf at `pg_repo_base_url` (a Nexus yum proxy or hosted repository
+with the PGDG layout), plus EPEL (pgBadger). How Nexus is organised does not matter to the
+playbooks, only the URL does. Set the GPG key URLs to the Nexus copies as well.
 
-| Key | Default object name | Version var |
-|---|---|---|
-| postgresql | `postgresql-<pg_version_full>.tar.gz` | `pg_version_full` |
-| pgaudit | `pgaudit-<ver>.tar.gz` (major must match PostgreSQL) | `pgaudit_version` |
-| pgauditlogtofile | `pgauditlogtofile-<ver>.tar.gz` | `pgauditlogtofile_version` |
-| repmgr | `repmgr-<ver>.tar.gz` (only if `repmgr_enabled`) | `repmgr_version` |
-| pgvector | `pgvector-<ver>.tar.gz` (only if listed in `pg_extensions_optional`) | `pgvector_version` |
-| pgbackrest | `pgbackrest-<ver>.tar.gz` (>= 2.51, meson build) | `pgbackrest_version` |
-
-Bucket: `pg_artifacts_s3_endpoint_url`, `_bucket`, `_prefix`, `_region`, `_ca_bundle`;
-credentials in Vault `<base>/artifacts_s3` (`access_key`, `secret_key`). Optional
-`sha256` per artifact is verified. With `pg_artifacts_source: local` the files are read
-from `artifacts/` on the controller instead (lab). Both directories are gitignored.
-
-Changing `pg_version_full` on a running cluster only **builds** the new version; the
-`pgsql-<major>` symlink is switched by `minor_upgrade.yml` (one switchover).
-The build needs `libyaml-devel` (pgBackRest), which lives in the CRB / PowerTools repo.
+- `pg_version_full` (e.g. `"17.11"`) is installed exactly: `postgresql17{,-libs,-server,-contrib}-17.11`,
+  then locked with `dnf versionlock` so `dnf update` cannot move it.
+- Changing `pg_version_full` and running `site.yml` changes **nothing** on a running node
+  (it reports "Version change postponed"). `minor_upgrade.yml` releases the lock, upgrades
+  node by node with one switchover, and locks again.
+- Extensions: `pgaudit_17`, `pgauditlogtofile_17` (always, preloaded), `repmgr_17` (if
+  `repmgr_enabled`), `pgvector_17` when `vector` is listed in `pg_extensions_optional`.
+- Note: the PGDG server RPM restarts PostgreSQL when it is upgraded. That is why the lock
+  matters: an unplanned `dnf update` on a primary would restart it.
 
 ## Defaults you must set (`inventories/<env>/group_vars/pg_cluster/`)
 
@@ -131,9 +124,10 @@ The build needs `libyaml-devel` (pgBackRest), which lives in the CRB / PowerTool
 | `pg_db_name` | application database; **the schema has the same name** |
 | `pg_role_ro_name` / `pg_role_dml_name` / `pg_role_ddl_name` | NOLOGIN group roles (ddl ⊃ dml ⊃ ro; ddl owns the schema) |
 | `pg_login_users` | `[{name, group: ro\|dml\|ddl, conn_limit?, vault_path?}]`. ddl users get `SET role = <ddl>` on login, so the ddl group owns every new object and default privileges apply |
-| `pg_version_full` | e.g. `"17.11"`; the major (`pg_version`) is derived from it |
+| `pg_version_full` | e.g. `"17.11"`; the major (`pg_version`) is derived from it; installed exactly and version-locked |
 | `pg_fs_layout`, `pkage` | `regular` (FHS paths) or `custom` (everything under `pkage`, e.g. `/PKfbgad1`) |
-| `pg_artifacts_s3_*`, `*_version` | bucket holding the source tarballs and the versions to build (see below) |
+| `pg_repo_base_url`, `pg_repo_gpg_key_url`, `pg_repo_epel_*` | Nexus yum mirror of PGDG / EPEL |
+| `pg_extensions_optional` | `[{name: vector, db: appdb}, {name: pgcrypto, db: appdb}]` |
 | `repmgr_enabled` | `true` (default) = 2 data nodes + witness with repmgr; `false` = single data node, the HA playbooks refuse to run |
 | `hashi_vault_*` | Vault URL, auth method, KV v2 mount and paths (key `password`) |
 | `pgbackrest_s3_*` | S3 endpoint, port, bucket, region, path-style, private CA |
@@ -217,10 +211,6 @@ in-house script.
 vagrant up
 ansible-playbook -i inventories/lab/hosts.yml playbooks/lab_prepare.yml playbooks/site.yml
 ```
-The lab reads the tarballs from `artifacts/` (`pg_artifacts_source: local`): download
-`postgresql-17.11.tar.gz` and the pgaudit, pgauditlogtofile, repmgr and pgbackrest release
-tarballs there, named as in `pg_artifacts`.
-
 The lab uses static secrets (`secrets_backend: vars`) and runs MinIO with self-signed TLS on
 the witness as the S3 bucket (`playbooks/lab_prepare.yml`).
 
@@ -237,20 +227,54 @@ Suggested test sequence:
 4. `switchover.yml`, then kill the primary (repmgrd fails over), then
    `rejoin.yml`.
 5. `rebuild_replica.yml`, then `minor_upgrade.yml`.
-6. `major_upgrade.yml -e pg_new_version_full=18.1 -e pgaudit_version=18.0`.
+6. `major_upgrade.yml -e pg_new_version_full=18.6`.
 7. `restore_pitr.yml` to a time before a test `DELETE`.
+
+## End-to-end test (Docker)
+
+```bash
+pip install ansible-core hvac
+ansible-galaxy collection install -r requirements.yml -r tests/e2e/requirements.yml -p tests/e2e/work/collections
+tests/e2e/run.sh            # all: fresh environment + HA scenario + single-node scenario
+tests/e2e/run.sh down       # remove the containers
+```
+
+`tests/e2e/docker-compose.yml` starts 4 Rocky Linux 9 containers with systemd (pg1, pg2,
+wit, solo), **HashiCorp Vault** (dev server, secrets read through AppRole, as in
+production) and **SeaweedFS** as the S3 server over HTTPS with a test CA. Packages come from
+download.postgresql.org in place of Nexus. Every playbook run writes its log to
+`tests/e2e/logs/`; `E2E_FROM=<n> tests/e2e/run.sh ha` resumes at step n.
+
+| # | HA scenario (2 data nodes + witness, `pg_fs_layout: custom`) |
+|---|---|
+| 1 | greenfield `site.yml` at 17.10: roles, `/PKe2e01` paths, preload libs, extensions, version lock, witness |
+| 2 | second `site.yml` reports `changed=0` |
+| 3 | passwords come from Vault; a password rotated in Vault is applied by `bootstrap_db.yml` |
+| 4 | replication, read-only standby, pgaudit lines in `audit-*.log` |
+| 5 | `backup_now.yml` (backup from the standby to S3), WAL archiving healthy, `cluster_status.yml` |
+| 6 | `switchover.yml` |
+| 7 | automatic failover by repmgrd (primary stopped, witness consensus), `rejoin.yml` |
+| 8 | `rebuild_replica.yml` |
+| 9 | `site.yml` with a new `pg_version_full` leaves running nodes alone |
+| 10 | `minor_upgrade.yml` 17.10 → 17.11, lock moved |
+| 11 | `restore_pitr.yml` to a timestamp before a `DELETE`; standby re-cloned |
+| 12 | `major_upgrade.yml` 17 → 18 (`pg_upgrade --link`), data + extensions kept, fresh backup |
+| 13 | `site.yml` on 18 reports `changed=0` |
+
+Single-node scenario (`repmgr_enabled: false`, `pg_fs_layout: regular`): converge,
+idempotence, backup on the primary, HA playbooks refuse to run.
 
 ## Layout
 ```
 playbooks/   one playbook per operation (+ group_vars/all.yml project defaults)
+tests/e2e/   end-to-end test on Docker (run.sh, compose file, test inventories)
 roles/
   pg_facts      live topology discovery (who is primary), split-brain guard
   secrets       HashiCorp Vault lookups (once, on the controller)
-  pg_repo       PGDG common / EPEL repositories (pgBadger only)
-  pg_build      S3 artifact fetch, compile PostgreSQL + extensions + pgBackRest, version symlink
-  postgresql    systemd unit, initdb (greenfield only), conf.d + pg_hba block, pg.env
+  pg_repo       PGDG / EPEL yum repositories (Nexus mirror)
+  postgresql    pinned + version-locked packages, initdb (greenfield only), conf.d + pg_hba block, pg.env
   repmgr        repmgr.conf, sudo, ssh trust, register/clone/rebuild/switchover/minor-upgrade tasks
   db_bootstrap  database, schema, ro/dml/ddl group roles, default privileges, login users
-  pgbackrest    pgBackRest config (S3 repo), stanza, backup wrapper + cron, PITR restore tasks
+  pgbackrest    pgBackRest (S3 repo), stanza, backup wrapper + cron, PITR restore tasks
   pgbadger      pgBadger + report script
 ```
