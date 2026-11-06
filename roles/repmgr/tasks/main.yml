@@ -9,8 +9,8 @@
     fail_msg: "Every host needs a unique integer repmgr_node_id in the inventory"
     quiet: true
 
-- name: Install repmgr packages
-  ansible.builtin.import_tasks: packages.yml
+- name: repmgr config directory and repmgrd unit
+  ansible.builtin.import_tasks: install.yml
 
 - name: repmgr log directory
   ansible.builtin.file:

@@ -5,7 +5,7 @@
 set -euo pipefail
 source /etc/pg-ops/pg.env
 OUT={{ pgbadger_output_dir | quote }}
-LOGFILE="$PGDATA/log/postgresql-$(LC_ALL=C date -d yesterday +%a).log"
+LOGFILE="$PG_LOG_DIR/postgresql-$(LC_ALL=C date -d yesterday +%a).log"
 if [[ ! -f "$LOGFILE" ]]; then
   echo "$(date '+%F %T') no log file $LOGFILE"
   exit 0

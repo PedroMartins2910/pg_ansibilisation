@@ -1,5 +1,7 @@
 ---
-# Rolling minor upgrade (e.g. 16.4 -> 16.6). Client impact: ONE switchover reconnect.
+# Rolling minor upgrade (e.g. 17.10 -> 17.11). Client impact: ONE switchover reconnect.
+# Set pg_version_full (and extension versions if needed) in the inventory first; the new
+# version is compiled from the S3 tarballs into a new prefix and pgsql-<major> is switched.
 #   1. witness   2. standby   3. switchover to the upgraded standby   4. old primary
 #   5. optional switch back (-e minor_upgrade_switch_back=true)
 #   ansible-playbook ... playbooks/minor_upgrade.yml -e confirm=YES

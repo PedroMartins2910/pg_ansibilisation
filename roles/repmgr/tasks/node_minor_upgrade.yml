@@ -10,15 +10,17 @@
     name: "{{ repmgr_service }}"
     state: stopped
 
-- name: Update PostgreSQL and repmgr packages
-  ansible.builtin.dnf:
-    name:
-      - "postgresql{{ pg_version }}*"
-      - "repmgr_{{ pg_version }}*"
-      - pgbackrest            # updated only where installed (update_only)
-    state: latest
-    update_only: true
-  register: _minor_pkgs
+- name: Build PostgreSQL {{ pg_version_full }} + extensions and switch {{ pg_install_link }}
+  ansible.builtin.include_role:
+    name: pg_build
+  vars:
+    pg_build_allow_switch: true
+
+- name: Build pgBackRest {{ pgbackrest_version }} (data nodes)
+  ansible.builtin.include_role:
+    name: pg_build
+    tasks_from: pgbackrest.yml
+  when: inventory_hostname in groups['pg_data']
 
 - name: Installed server version
   ansible.builtin.command: "{{ pg_bin_dir }}/postgres -V"
@@ -36,8 +38,7 @@
   ansible.builtin.systemd:
     name: "{{ pg_service }}"
     state: restarted
-  when: >-
-    _minor_pkgs is changed or (_minor_running.stdout | trim).split(' ')[0] not in _minor_installed.stdout
+  when: (_minor_running.stdout | trim).split(' ')[0] not in _minor_installed.stdout
 
 - name: Wait until PostgreSQL accepts connections
   ansible.builtin.command: "{{ pg_bin_dir }}/pg_isready -q -p {{ pg_port }}"

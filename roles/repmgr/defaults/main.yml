@@ -1,5 +1,5 @@
 ---
-repmgr_packages: ["repmgr_{{ pg_version }}"]
+# repmgr is compiled into the PostgreSQL prefix by roles/pg_build (repmgr_version, all.yml).
 
 # Host vars (required): repmgr_node_id (unique int). Optional: repmgr_location, repmgr_priority.
 repmgr_location: default
@@ -8,7 +8,7 @@ repmgr_failover: automatic
 repmgr_reconnect_attempts: 6
 repmgr_reconnect_interval: 5
 repmgr_monitor_interval_secs: 2
-repmgr_log_dir: /var/log/repmgr
+repmgr_log_dir: "{{ pg_log_root }}/repmgr"
 repmgr_update_password: on_create      # 'always' to rotate from Vault on every run
 
 repmgr_clone_timeout: 43200            # seconds (12h) for big databases

@@ -1,9 +1,5 @@
 ---
-pg_packages:
-  - "postgresql{{ pg_version }}"
-  - "postgresql{{ pg_version }}-server"
-  - "postgresql{{ pg_version }}-contrib"
-pg_extra_packages: []                 # e.g. ["pg_partman_{{ pg_version }}"] - rendered per version
+# PostgreSQL itself is compiled by roles/pg_build; only runtime helpers come from dnf.
 pg_support_packages: [python3-psycopg2, tar, gzip]
 
 # Only used for a brand-new cluster (never on an existing data directory)
@@ -22,6 +18,7 @@ pg_shared_preload_libraries: "{{ (['repmgr'] if repmgr_enabled | bool else []) +
 pg_settings_base:
   listen_addresses: "*"
   port: "{{ pg_port }}"
+  unix_socket_directories: "{{ pg_socket_dir }}"
   password_encryption: scram-sha-256
   wal_level: replica
   wal_log_hints: "on"                 # required by pg_rewind (repmgr node rejoin)
@@ -31,16 +28,16 @@ pg_settings_base:
   hot_standby: "on"
   hot_standby_feedback: "on"
   archive_mode: "{{ pg_archive_mode }}"
-  archive_command: "pgbackrest --stanza={{ pgbackrest_stanza }} archive-push %p"
+  archive_command: "{{ pgbackrest_bin }} --stanza={{ pgbackrest_stanza }} archive-push %p"
   # used by standbys to catch up from the S3 archive (ignored on the primary)
-  restore_command: "pgbackrest --stanza={{ pgbackrest_stanza }} archive-get %f \"%p\""
+  restore_command: "{{ pgbackrest_bin }} --stanza={{ pgbackrest_stanza }} archive-get %f \"%p\""
   archive_timeout: 300                # max RPO for idle periods (seconds)
 
 # Logging format readable by pgBadger AND Dynatrace log ingestion
 pg_settings_logging:
   logging_collector: "on"
   log_destination: stderr
-  log_directory: log
+  log_directory: "{{ pg_log_dir }}"
   log_filename: "postgresql-%a.log"
   log_truncate_on_rotation: "on"
   log_rotation_age: 1d

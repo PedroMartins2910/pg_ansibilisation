@@ -18,6 +18,7 @@
   become: true
   roles:
     - pg_repo
+    - pg_build
     - postgresql
 
 - name: repmgr common configuration

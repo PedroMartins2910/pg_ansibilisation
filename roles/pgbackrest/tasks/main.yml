@@ -1,8 +1,8 @@
 ---
-- name: Install pgBackRest
-  ansible.builtin.dnf:
-    name: "{{ pgbackrest_packages }}"
-    state: present
+- name: Compile / install pgBackRest
+  ansible.builtin.include_role:
+    name: pg_build
+    tasks_from: pgbackrest.yml
 
 - name: Directories
   ansible.builtin.file:

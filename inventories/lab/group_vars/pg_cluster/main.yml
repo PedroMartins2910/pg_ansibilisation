@@ -1,6 +1,11 @@
 ---
 pg_cluster_name: lab
-pg_version: 16
+pg_version_full: "17.11"
+pg_fs_layout: regular            # try "custom" with pkage: /PKlab01
+# pkage: /PKlab01
+
+# Lab: put the tarballs in ./artifacts/ (see README) instead of S3
+pg_artifacts_source: local
 pg_node_ip: "{{ ansible_host }}"
 
 pg_db_name: labdb

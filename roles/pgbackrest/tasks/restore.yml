@@ -78,6 +78,6 @@
 - name: Recovery did not complete
   ansible.builtin.fail:
     msg: >-
-      Recovery did not finish. Check {{ pg_data_dir }}/log and {{ pgbackrest_log_dir }}
+      Recovery did not finish. Check {{ pg_log_dir }} and {{ pgbackrest_log_dir }}
       (a target time after the last archived WAL makes PostgreSQL stop with FATAL).
   when: _rs_state.stdout | default('') | trim != 'f'

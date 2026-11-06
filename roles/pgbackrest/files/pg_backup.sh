@@ -68,7 +68,7 @@ if pgbackrest --stanza="$PGBACKREST_STANZA" --type="$TYPE" "${extra[@]}" backup 
   status ok "$label"
   echo "$label"
 else
-  log ERROR "backup FAILED - see /var/log/pgbackrest/"
+  log ERROR "backup FAILED - see the pgBackRest log directory"
   logger -t pg-ops -p daemon.err "pg_backup: pgBackRest backup failed"
   status failed "$TYPE"
   exit 1

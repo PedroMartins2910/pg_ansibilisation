@@ -19,6 +19,14 @@
   run_once: true
   when: not (repmgr_enabled | bool)
 
+- name: Filesystem layout
+  ansible.builtin.assert:
+    that:
+      - pg_fs_layout in ['regular', 'custom']
+      - pg_fs_layout == 'regular' or (pkage | default('') | regex_search('^/[^ ]+$'))
+    fail_msg: "pg_fs_layout must be regular or custom; custom needs an absolute pkage (e.g. /PKfbgad1)"
+    quiet: true
+
 - name: Check whether PostgreSQL {{ pg_version }} binaries are installed
   ansible.builtin.stat:
     path: "{{ pg_bin_dir }}/psql"

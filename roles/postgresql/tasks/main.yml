@@ -1,6 +1,9 @@
 ---
-- name: Install packages
-  ansible.builtin.import_tasks: packages.yml
+# Binaries are compiled by roles/pg_build (runs before this role).
+- name: Runtime packages
+  ansible.builtin.dnf:
+    name: "{{ pg_support_packages }}"
+    state: present
 
 - name: pg-ops directories
   ansible.builtin.file:
@@ -12,6 +15,7 @@
   loop:
     - {path: "{{ pgops_conf_dir }}", owner: root, mode: "0755"}
     - {path: "{{ pgops_log_dir }}", owner: postgres, mode: "0750"}
+    - {path: "{{ pg_log_dir }}", owner: postgres, mode: "0750"}
 
 - name: Shared environment file for pg-ops scripts
   ansible.builtin.template:
@@ -21,7 +25,7 @@
     group: postgres
     mode: "0640"
 
-- name: systemd drop-in pinning PGDATA
+- name: systemd unit and socket directory
   ansible.builtin.import_tasks: systemd.yml
 
 - name: Initialise a new cluster (greenfield primary or witness only)

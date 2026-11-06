@@ -1,0 +1,27 @@
+---
+# repmgr / repmgrd binaries are compiled into {{ pg_bin_dir }} by roles/pg_build.
+- name: repmgr binary is present
+  ansible.builtin.stat:
+    path: "{{ repmgr_bin }}"
+  register: _repmgr_bin
+  failed_when: not _repmgr_bin.stat.exists
+
+- name: repmgr configuration directory
+  ansible.builtin.file:
+    path: "{{ repmgr_conf_path | dirname }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0750"
+
+- name: systemd unit {{ repmgr_service }}
+  ansible.builtin.template:
+    src: repmgrd.service.j2
+    dest: "/etc/systemd/system/{{ repmgr_service }}.service"
+    mode: "0644"
+  register: _repmgr_unit
+
+- name: Reload systemd after unit change
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _repmgr_unit is changed

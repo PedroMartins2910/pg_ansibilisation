@@ -2,7 +2,9 @@
 # Major upgrade PREFLIGHT - no downtime, safe to run any time before the window:
 # installs the new version side by side, initdb's the new cluster on the primary and
 # runs pg_upgrade --check against the live old cluster.
-#   ansible-playbook ... playbooks/major_upgrade_preflight.yml -e pg_new_version=17 -e confirm=YES
+#   ansible-playbook ... playbooks/major_upgrade_preflight.yml -e pg_new_version_full=18.1 \
+#       -e pgaudit_version=18.0 -e confirm=YES     (pgaudit's major must match)
+# The new version is compiled from the S3 tarballs side by side (pgsql-<new major>).
 - name: Discover and validate
   hosts: pg_cluster
   become: true
@@ -15,47 +17,45 @@
       ansible.builtin.assert:
         that:
           - repmgr_enabled | bool
-          - pg_new_version is defined
-          - pg_new_version | int > pg_version | int
+          - pg_new_version_full is defined
+          - (pg_new_version_full | string).split('.')[0] | int > pg_version | int
           - pg_current_primary != ''
           - groups['pg_cluster'] | map('extract', hostvars, 'pg_node_role') | select('in', ['primary', 'standby', 'witness']) | list | length == groups['pg_cluster'] | length
           - confirm | default('') == 'YES'
-        fail_msg: "Needs -e pg_new_version=<N> (> {{ pg_version }}), a healthy cluster (all nodes up) and -e confirm=YES"
+        fail_msg: "Needs -e pg_new_version_full=<N.n> (major > {{ pg_version }}), a healthy cluster (all nodes up) and -e confirm=YES"
       run_once: true
 
     - name: Upgrade facts
       ansible.builtin.set_fact:
         upg_old_version: "{{ pg_version | string }}"
-        upg_new_version: "{{ pg_new_version | string }}"
-        upg_old_bin: "/usr/pgsql-{{ pg_version }}/bin"
-        upg_new_bin: "/usr/pgsql-{{ pg_new_version }}/bin"
+        upg_new_version: "{{ (pg_new_version_full | string).split('.')[0] }}"
+        upg_new_version_full: "{{ pg_new_version_full | string }}"
+        upg_old_install_dir: "{{ pg_install_dir }}"
+        upg_old_bin: "{{ pg_bin_dir }}"
+        upg_new_bin: "{{ pg_soft_root }}/pgsql-{{ (pg_new_version_full | string).split('.')[0] }}/bin"
         upg_old_data: "{{ pg_data_dir }}"
-        upg_new_data: "{{ pg_data_dir_template | replace('{version}', pg_new_version | string) }}"
+        upg_new_data: "{{ pg_data_dir_template | replace('{version}', (pg_new_version_full | string).split('.')[0]) }}"
         upg_old_service: "{{ pg_service }}"
         upg_old_repmgr_service: "{{ repmgr_service }}"
         upg_primary: "{{ pg_current_primary }}"
 
 # ---------------------------------------------------------------- preflight (no downtime)
-- name: "Preflight: install the new version side by side"
+- name: "Preflight: build the new version side by side"
   hosts: pg_cluster
   become: true
-  vars:
-    pg_repo_versions: ["{{ upg_old_version }}", "{{ upg_new_version }}"]
   tasks:
-    - name: Repositories
+    - name: PostgreSQL + extensions (new version)
       ansible.builtin.include_role:
-        name: pg_repo
-    - name: PostgreSQL packages (new version)
-      ansible.builtin.include_role:
-        name: postgresql
-        tasks_from: packages.yml
+        name: pg_build
       vars:
+        pg_version_full: "{{ upg_new_version_full }}"
         pg_version: "{{ upg_new_version }}"
-    - name: repmgr packages (new version)
+    - name: repmgr unit (new version)
       ansible.builtin.include_role:
         name: repmgr
-        tasks_from: packages.yml
+        tasks_from: install.yml
       vars:
+        pg_version_full: "{{ upg_new_version_full }}"
         pg_version: "{{ upg_new_version }}"
 
 - name: "Preflight: new cluster + pg_upgrade --check on the primary"
@@ -96,7 +96,7 @@
 
         - name: Already upgraded
           ansible.builtin.fail:
-            msg: "{{ upg_new_data }} was already upgraded. Set pg_version={{ upg_new_version }} in the inventory."
+            msg: "{{ upg_new_data }} was already upgraded. Set pg_version_full={{ upg_new_version_full }} in the inventory."
           when: _upg_done.stat.exists
 
         - name: New data directory
@@ -141,6 +141,7 @@
             tasks_from: config_files.yml
           vars:
             pg_version: "{{ upg_new_version }}"
+            pg_version_full: "{{ upg_new_version_full }}"
 
         - name: pg_upgrade --check (live)
           ansible.builtin.command:
