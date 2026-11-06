@@ -43,7 +43,7 @@
           copytruncate
       }
 
-- name: sudo rules for postgres (service control and VIP)
+- name: sudo rules for postgres (service control)
   ansible.builtin.template:
     src: sudoers.j2
     dest: /etc/sudoers.d/pg-ops-postgres

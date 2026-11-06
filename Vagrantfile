@@ -1,4 +1,4 @@
-# Lab: 3 x Rocky Linux 9 on a private network (VIP 192.168.56.10)
+# Lab: 3 x Rocky Linux 9 on a private network (192.168.56.0/24)
 #   vagrant up
 #   ansible-playbook -i inventories/lab/hosts.yml playbooks/lab_prepare.yml playbooks/site.yml
 NODES = { "lab-pg1" => "192.168.56.11", "lab-pg2" => "192.168.56.12", "lab-wit" => "192.168.56.13" }

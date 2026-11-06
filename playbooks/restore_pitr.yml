@@ -17,6 +17,7 @@
     - name: Validate
       ansible.builtin.assert:
         that:
+          - repmgr_enabled | bool
           - target is defined
           - target in groups['pg_data']
           - confirm | default('') == 'YES'

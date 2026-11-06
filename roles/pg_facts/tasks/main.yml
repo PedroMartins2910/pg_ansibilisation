@@ -9,6 +9,16 @@
 #   pg_current_primary  (inventory hostname or '')
 #   pg_current_standbys (list)
 
+- name: Without repmgr the cluster is a single data node and no witness
+  ansible.builtin.assert:
+    that:
+      - groups['pg_data'] | length == 1
+      - groups['pg_witness'] | default([]) | length == 0
+    fail_msg: "repmgr_enabled is false: pg_data must contain exactly one host and pg_witness must be empty"
+    quiet: true
+  run_once: true
+  when: not (repmgr_enabled | bool)
+
 - name: Check whether PostgreSQL {{ pg_version }} binaries are installed
   ansible.builtin.stat:
     path: "{{ pg_bin_dir }}/psql"

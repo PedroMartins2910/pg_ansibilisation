@@ -5,6 +5,5 @@ Cmnd_Alias PGOPS_SVC = /usr/bin/systemctl start {{ pg_service }}, \
                        /usr/bin/systemctl reload {{ pg_service }}, \
                        /usr/bin/systemctl start {{ repmgr_service }}, \
                        /usr/bin/systemctl stop {{ repmgr_service }}
-Cmnd_Alias PGOPS_VIP = /usr/local/sbin/vip_ctl.sh
 Defaults:postgres !requiretty
-postgres ALL=(root) NOPASSWD: PGOPS_SVC, PGOPS_VIP
+postgres ALL=(root) NOPASSWD: PGOPS_SVC

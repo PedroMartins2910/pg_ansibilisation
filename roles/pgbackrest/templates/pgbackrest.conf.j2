@@ -25,7 +25,9 @@ compress-type={{ pgbackrest_compress_type }}
 compress-level={{ pgbackrest_compress_level }}
 start-fast=y
 delta=y
+{% if not (pgbackrest_single_host | bool) %}
 backup-standby=y
+{% endif %}
 {% if pgbackrest_archive_async | bool %}
 archive-async=y
 spool-path={{ pgbackrest_spool_dir }}
@@ -41,7 +43,7 @@ log-level-file=detail
 pg1-path={{ pg_data_dir }}
 pg1-port={{ pg_port }}
 pg1-socket-path={{ pg_socket_dir }}
-{% if not (pgbackrest_single_host | default(false) | bool) %}
+{% if not (pgbackrest_single_host | bool) %}
 {%   for peer in groups['pg_data'] | difference([inventory_hostname]) %}
 pg{{ loop.index + 1 }}-host={{ hostvars[peer].pg_node_ip }}
 pg{{ loop.index + 1 }}-host-user=postgres

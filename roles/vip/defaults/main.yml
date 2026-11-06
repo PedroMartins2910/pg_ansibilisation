@@ -1,3 +1,0 @@
----
-vip_guard_interval: 3            # seconds between checks
-vip_packages: [iproute, iputils]

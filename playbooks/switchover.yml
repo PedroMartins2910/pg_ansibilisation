@@ -11,6 +11,7 @@
     - name: Validate request
       ansible.builtin.assert:
         that:
+          - repmgr_enabled | bool
           - new_primary is defined
           - new_primary in groups['pg_data']
           - pg_current_primary != ''

@@ -13,6 +13,7 @@
     - name: Validate
       ansible.builtin.assert:
         that:
+          - repmgr_enabled | bool
           - pg_current_primary != ''
           - pg_current_standbys | length >= 1
           - confirm | default('') == 'YES'

@@ -31,7 +31,8 @@ backup_type: full
 backup_cron_minute: "0"
 backup_cron_hour: "1"
 backup_cron_weekday: "*"
-backup_allow_on_primary: false         # fallback to the primary when no standby streams
+backup_allow_on_primary: "{{ not (repmgr_enabled | bool) }}"   # fallback to the primary when no standby streams (forced when single node)
+pgbackrest_single_host: "{{ not (repmgr_enabled | bool) }}"    # no pg2-host peer
 
 # --- Performance
 pgbackrest_process_max: 4

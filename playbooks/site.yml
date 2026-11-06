@@ -28,7 +28,8 @@
       ansible.builtin.include_role:
         name: pg_facts
   roles:
-    - repmgr
+    - role: repmgr
+      when: repmgr_enabled | bool
 
 - name: repmgr primary
   hosts: pg_data
@@ -38,7 +39,9 @@
       ansible.builtin.include_role:
         name: repmgr
         tasks_from: primary.yml
-      when: pg_node_role == 'primary'
+      when:
+        - repmgr_enabled | bool
+        - pg_node_role == 'primary'
 
 - name: repmgr standbys
   hosts: pg_data
@@ -49,7 +52,9 @@
       ansible.builtin.include_role:
         name: repmgr
         tasks_from: standby.yml
-      when: pg_node_role in ['standby', 'uninitialized', 'stopped']
+      when:
+        - repmgr_enabled | bool
+        - pg_node_role in ['standby', 'uninitialized', 'stopped']
 
 - name: repmgr witness
   hosts: pg_witness
@@ -59,6 +64,7 @@
       ansible.builtin.include_role:
         name: repmgr
         tasks_from: witness.yml
+      when: repmgr_enabled | bool
 
 - name: repmgrd
   hosts: pg_cluster
@@ -71,12 +77,12 @@
       ansible.builtin.include_role:
         name: repmgr
         tasks_from: repmgrd.yml
+      when: repmgr_enabled | bool
 
-- name: VIP, backups, pgBadger
+- name: Backups, pgBadger
   hosts: pg_data
   become: true
   roles:
-    - vip
     - pgbackrest
     - pgbadger
 
@@ -92,4 +98,6 @@
       ansible.builtin.include_role:
         name: repmgr
         tasks_from: cluster_show.yml
-      when: inventory_hostname == pg_current_primary
+      when:
+        - repmgr_enabled | bool
+        - inventory_hostname == pg_current_primary

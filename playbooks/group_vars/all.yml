@@ -16,10 +16,13 @@ pg_service: "postgresql-{{ pg_version }}"
 pg_home_dir: /var/lib/pgsql
 pg_socket_dir: /run/postgresql
 
-# IP that the other nodes use to reach this node (pg_hba, repmgr conninfo, VIP guard).
+# IP that the other nodes use to reach this node (pg_hba, repmgr conninfo, pgBackRest).
 pg_node_ip: "{{ ansible_default_ipv4.address }}"
 
-# repmgr
+# repmgr. false = single data node, no replication, no witness (some apps do not
+# need HA). The HA playbooks (switchover, promote, rejoin, rebuild_replica,
+# minor/major upgrade, restore_pitr) refuse to run when it is false.
+repmgr_enabled: true
 repmgr_user: repmgr
 repmgr_db: repmgr
 repmgr_node_name: "{{ inventory_hostname_short }}"
@@ -31,12 +34,6 @@ repmgr_force_register: false
 
 # psql shortcut (always run with become_user: postgres)
 psql_cmd: "{{ pg_bin_dir }}/psql -X -A -t -q -p {{ pg_port }}"
-
-# VIP (moved by repmgr event hooks + vip-guard service)
-vip_enabled: true
-vip_address: ""
-vip_prefix: 24
-vip_interface: "{{ ansible_default_ipv4.interface }}"
 
 # pg-ops shared paths
 pgops_conf_dir: /etc/pg-ops

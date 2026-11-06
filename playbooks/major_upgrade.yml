@@ -167,7 +167,7 @@
 # ---------------------------------------------------------------- after the window
 # From here on this is a normal converge with pg_version = new:
 #   primary re-registered (--force), standby cloned into the new data dir,
-#   witness re-initialised and registered, repmgrd, VIP, pgBackRest (pg paths) and
+#   witness re-initialised and registered, repmgrd, pgBackRest (pg paths) and
 #   pgBadger switched to the new binaries.
 - name: Converge on the new version
   ansible.builtin.import_playbook: site.yml

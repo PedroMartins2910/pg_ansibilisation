@@ -18,11 +18,6 @@ pg_login_users:
 pg_hba_app_cidrs:
   - 10.20.0.0/16
 
-# Floating IP for clients (all data nodes on the same L2 segment)
-vip_address: 10.10.0.10
-vip_prefix: 24
-# vip_interface: eth0      # default: interface of the default route
-
 # PostgreSQL tuning
 pg_settings_extra:
   shared_buffers: 8GB

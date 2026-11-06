@@ -1,7 +1,10 @@
 # pg-ops — PostgreSQL 16 + repmgr HA, operated from Ansible
 
-Topology: **2 data nodes + 1 repmgr witness**, repmgrd **automatic failover**, clients
-connect through a **VIP** that always follows the writable primary. Backups use
+Topology: **2 data nodes + 1 repmgr witness**, repmgrd **automatic failover**. There is
+no VIP: applications list every data node in their connection string
+(`host=pgdb01,pgdb02 target_session_attrs=read-write`) and libpq finds the primary.
+With `repmgr_enabled: false` the cluster is a **single data node** (no replication, no
+witness) for applications that do not need HA. Backups use
 **pgBackRest** on the DB nodes, with one repository in an **on-prem S3-compatible bucket**:
 daily full backups taken from the standby, continuous WAL archiving, and retention by
 count. Secrets come from **HashiCorp Vault**.
@@ -45,10 +48,8 @@ inventory for that. It also aborts if two primaries are found (split-brain).
 
 ### Automatic failover
 repmgrd promotes the standby when the primary is unreachable and the witness agrees
-(`primary_visibility_consensus`). The repmgr event hook moves the VIP, and `vip-guard`
-enforces it:
-- the VIP is only ever on a node where `pg_is_in_recovery() = false`;
-- if two primaries exist, the one on the older or equal timeline drops the VIP.
+(`primary_visibility_consensus`). Clients using `target_session_attrs=read-write`
+reconnect to the new primary on their own.
 
 The failed node stays down. Bring it back with `rejoin.yml`, which runs `pg_rewind` and
 falls back to a full re-clone if the rewind fails.
@@ -72,7 +73,7 @@ falls back to a full re-clone if the rewind fails.
    - start `ANALYZE` in the background.
 3. **After** (cluster open, no HA yet):
    - a normal converge on the new version re-clones the standby and re-creates the
-     witness, and switches the VIP, pgBackRest and pgBadger to the new paths;
+     witness, and switches pgBackRest and pgBadger to the new paths;
    - pgBackRest `stanza-upgrade` already ran before the new primary started; a fresh
      full backup is taken because the new cluster has a **new system identifier**.
 4. Set `pg_version: <new>` in the inventory.
@@ -89,7 +90,7 @@ falls back to a full re-clone if the rewind fails.
 | `pg_db_name` | application database; **the schema has the same name** |
 | `pg_role_ro_name` / `pg_role_dml_name` / `pg_role_ddl_name` | NOLOGIN group roles (ddl ⊃ dml ⊃ ro; ddl owns the schema) |
 | `pg_login_users` | `[{name, group: ro\|dml\|ddl, conn_limit?, vault_path?}]`. ddl users get `SET role = <ddl>` on login, so the ddl group owns every new object and default privileges apply |
-| `vip_address`, `vip_prefix`, `vip_interface` | floating IP (all data nodes on the same L2 segment) |
+| `repmgr_enabled` | `true` (default) = 2 data nodes + witness with repmgr; `false` = single data node, the HA playbooks refuse to run |
 | `hashi_vault_*` | Vault URL, auth method, KV v2 mount and paths (key `password`) |
 | `pgbackrest_s3_*` | S3 endpoint, port, bucket, region, path-style, private CA |
 | `pgbackrest_retention_full`, `pgbackrest_encrypt` | number of daily fulls kept (default 14); optional repo encryption |
@@ -175,6 +176,9 @@ ansible-playbook -i inventories/lab/hosts.yml playbooks/lab_prepare.yml playbook
 The lab uses static secrets (`secrets_backend: vars`) and runs MinIO with self-signed TLS on
 the witness as the S3 bucket (`playbooks/lab_prepare.yml`).
 
+Single-node mode: put one host in `pg_data`, leave `pg_witness` empty and set
+`repmgr_enabled: false`; run steps 1–3 below (switchover, promote, rejoin, rebuild, upgrades and PITR restore need repmgr for now).
+
 Suggested test sequence:
 1. `site.yml` twice. The second run must report `changed=0`.
 2. `bootstrap_db.yml`, then check the privileges:
@@ -182,7 +186,7 @@ Suggested test sequence:
    - dml cannot CREATE;
    - a table created by the ddl user is readable by ro.
 3. `backup_now.yml`, then `cluster_status.yml`.
-4. `switchover.yml`, then kill the primary (repmgrd fails over and the VIP moves), then
+4. `switchover.yml`, then kill the primary (repmgrd fails over), then
    `rejoin.yml`.
 5. `rebuild_replica.yml`, then `minor_upgrade.yml`.
 6. `major_upgrade.yml -e pg_new_version=17`.
@@ -197,7 +201,6 @@ roles/
   pg_repo       PGDG / mirror repositories
   postgresql    packages, initdb (greenfield only), conf.d + pg_hba block, pg.env
   repmgr        repmgr.conf, sudo, ssh trust, register/clone/rebuild/switchover/minor-upgrade tasks
-  vip           vip_ctl.sh, vip-guard service, repmgr event hook
   db_bootstrap  database, schema, ro/dml/ddl group roles, default privileges, login users
   pgbackrest    pgBackRest (S3 repo), stanza, backup wrapper + cron, PITR restore tasks
   pgbadger      pgBadger + report script

@@ -31,9 +31,3 @@ repmgrd_service_start_command='sudo -n /usr/bin/systemctl start {{ repmgr_servic
 repmgrd_service_stop_command='sudo -n /usr/bin/systemctl stop {{ repmgr_service }}'
 
 ssh_options='{{ repmgr_ssh_options }}'
-
-{% if inventory_hostname in groups['pg_data'] %}
-# VIP handling (see roles/vip)
-event_notification_command='{{ repmgr_event_hook }} %n %e %s "%t" "%d"'
-event_notifications='standby_promote,repmgrd_failover_promote,standby_switchover,standby_follow,repmgrd_failover_follow,node_rejoin'
-{% endif %}

@@ -13,6 +13,7 @@
     - name: Validate request
       ansible.builtin.assert:
         that:
+          - repmgr_enabled | bool
           - new_primary is defined
           - new_primary in groups['pg_data']
           - hostvars[new_primary].pg_node_role | default('') in ['standby', 'primary']
@@ -35,14 +36,6 @@
         state: stopped
         masked: true
       loop: ["{{ repmgr_service }}", "{{ pg_service }}"]
-      failed_when: false
-      when:
-        - inventory_hostname != new_primary
-        - pg_node_role | default('unreachable') != 'standby'
-
-    - name: Release the VIP on the failed node
-      ansible.builtin.command: /usr/local/sbin/vip_ctl.sh down
-      changed_when: true
       failed_when: false
       when:
         - inventory_hostname != new_primary

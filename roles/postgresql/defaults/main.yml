@@ -15,7 +15,7 @@ pg_initial_primary: false
 pg_start_stopped_nodes: false
 
 pg_archive_mode: "on"                 # "always" also archives on standbys (double push)
-pg_shared_preload_libraries: [repmgr, pg_stat_statements]
+pg_shared_preload_libraries: "{{ (['repmgr'] if repmgr_enabled | bool else []) + ['pg_stat_statements'] }}"
 
 # conf.d/00-ansible.conf is included at the END of postgresql.conf, so it wins over
 # postgresql.conf (not over postgresql.auto.conf / ALTER SYSTEM).

@@ -10,7 +10,6 @@ repmgr_reconnect_interval: 5
 repmgr_monitor_interval_secs: 2
 repmgr_log_dir: /var/log/repmgr
 repmgr_update_password: on_create      # 'always' to rotate from Vault on every run
-repmgr_event_hook: /usr/local/bin/repmgr_event_hook.sh
 
 repmgr_clone_timeout: 43200            # seconds (12h) for big databases
 repmgr_wait_streaming_retries: 90      # x 10s
