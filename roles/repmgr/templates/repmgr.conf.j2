@@ -18,7 +18,11 @@ follow_command='{{ repmgr_bin }} standby follow -f {{ repmgr_conf_path }} --log-
 reconnect_attempts={{ repmgr_reconnect_attempts }}
 reconnect_interval={{ repmgr_reconnect_interval }}
 monitor_interval_secs={{ repmgr_monitor_interval_secs }}
-primary_visibility_consensus=true
+# With a witness, a standby only promotes if the witness cannot see the primary either.
+# With 2 nodes and no witness there is no third vote: a network cut between the two
+# nodes promotes the standby while the old primary keeps running (split-brain, accepted
+# risk - see README "Two nodes, no witness").
+primary_visibility_consensus={{ 'true' if (groups['pg_witness'] | default([]) | length > 0) else 'false' }}
 standby_disconnect_on_failover=true
 connection_check_type=ping
 

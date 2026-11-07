@@ -1,6 +1,7 @@
 # pg-ops — PostgreSQL + repmgr HA, operated from Ansible
 
-Topology: **2 data nodes + 1 repmgr witness**, repmgrd **automatic failover**. There is
+Topology: **2 data nodes, no witness**, repmgrd **automatic failover** (split-brain risk
+accepted, see *Two nodes, no witness*). There is
 no VIP: applications list every data node in their connection string
 (`host=pgdb01,pgdb02 target_session_attrs=read-write`) and libpq finds the primary.
 With `repmgr_enabled: false` the cluster is a **single data node** (no replication, no
@@ -52,15 +53,38 @@ Every destructive playbook requires `-e confirm=YES`. Before acting, it finds ou
 inventory for that. It also aborts if two primaries are found (split-brain).
 
 ### Automatic failover
-repmgrd promotes the standby when the primary is unreachable and the witness agrees
-(`primary_visibility_consensus`). Clients using `target_session_attrs=read-write`
-reconnect to the new primary on their own.
+repmgrd on the standby promotes it when the primary stays unreachable for
+`repmgr_reconnect_attempts` × `repmgr_reconnect_interval` (default 6 × 5 s). Clients using
+`target_session_attrs=read-write` reconnect to the new primary on their own.
 
 The failed node stays down. Bring it back with `rejoin.yml`, which runs `pg_rewind` and
 falls back to a full re-clone if the rewind fails.
 
+### Two nodes, no witness: split-brain (accepted risk)
+With 2 servers the standby cannot tell "primary dead" from "network cut between the two
+nodes". On a network cut it promotes itself while the old primary keeps running: **two
+writable primaries**, and applications (multi-host, read-write) can write to both.
+Writes made on the old primary during the cut are **lost** when it is rejoined.
+`primary_visibility_consensus` is off (it needs a witness).
+
+pg-ops detects it: every playbook refuses to run while two primaries exist (`SPLIT-BRAIN`).
+Recovery (tested end to end):
+1. Keep the node repmgr promoted (`repmgr cluster show` lists it as primary).
+2. Fence the old primary: `systemctl stop repmgr-<major> postgresql-<major> && systemctl mask postgresql-<major>`.
+3. `rejoin.yml -e target=<old primary> -e confirm=YES` (pg_rewind, falls back to a re-clone).
+
+A witness in a third location (`pg_witness` group) removes this risk; it is supported but
+not used.
+
+### Changing parameters
+`site.yml` applies `pg_settings_*` / pg_hba changes with a **reload** (no restart, no
+disconnection). Settings that need a restart (`shared_buffers`, `max_connections`,
+`shared_preload_libraries`, …) are reported as pending; `-e pg_allow_restart=true` restarts
+the affected nodes (**both at once**, short outage). A `repmgr.conf` change restarts repmgrd
+one node at a time; PostgreSQL is not touched.
+
 ### Minor upgrade flow
-1. Upgrade the witness.
+1. Upgrade the witness (if any).
 2. Upgrade the standby.
 3. Switch over to the upgraded standby.
 4. Upgrade the old primary (now a standby).
@@ -128,7 +152,7 @@ playbooks, only the URL does. Set the GPG key URLs to the Nexus copies as well.
 | `pg_fs_layout`, `pkage` | `regular` (FHS paths) or `custom` (everything under `pkage`, e.g. `/PKfbgad1`) |
 | `pg_repo_base_url`, `pg_repo_gpg_key_url`, `pg_repo_epel_*` | Nexus yum mirror of PGDG / EPEL |
 | `pg_extensions_optional` | `[{name: vector, db: appdb}, {name: pgcrypto, db: appdb}]` |
-| `repmgr_enabled` | `true` (default) = 2 data nodes + witness with repmgr; `false` = single data node, the HA playbooks refuse to run |
+| `repmgr_enabled` | `true` (default) = 2 data nodes with repmgr; `false` = single data node, the HA playbooks refuse to run |
 | `hashi_vault_*` | Vault URL, auth method, KV v2 mount and paths (key `password`) |
 | `pgbackrest_s3_*` | S3 endpoint, port, bucket, region, path-style, private CA |
 | `pgbackrest_retention_full`, `pgbackrest_encrypt` | number of daily fulls kept (default 14); optional repo encryption |
@@ -239,27 +263,31 @@ tests/e2e/run.sh            # all: fresh environment + HA scenario + single-node
 tests/e2e/run.sh down       # remove the containers
 ```
 
-`tests/e2e/docker-compose.yml` starts 4 Rocky Linux 9 containers with systemd (pg1, pg2,
-wit, solo), **HashiCorp Vault** (dev server, secrets read through AppRole, as in
+`tests/e2e/docker-compose.yml` starts 3 Rocky Linux 9 containers with systemd (pg1, pg2,
+solo), **HashiCorp Vault** (dev server, secrets read through AppRole, as in
 production) and **SeaweedFS** as the S3 server over HTTPS with a test CA. Packages come from
 download.postgresql.org in place of Nexus. Every playbook run writes its log to
 `tests/e2e/logs/`; `E2E_FROM=<n> tests/e2e/run.sh ha` resumes at step n.
 
-| # | HA scenario (2 data nodes + witness, `pg_fs_layout: custom`) |
+| # | HA scenario (2 data nodes, no witness, `pg_fs_layout: custom`) |
 |---|---|
-| 1 | greenfield `site.yml` at 17.10: roles, `/PKe2e01` paths, preload libs, extensions, version lock, witness |
+| 1 | greenfield `site.yml` at 17.10: roles, `/PKe2e01` paths, preload libs, extensions, version lock, 2-node repmgr |
 | 2 | second `site.yml` reports `changed=0` |
 | 3 | passwords come from Vault; a password rotated in Vault is applied by `bootstrap_db.yml` |
 | 4 | replication, read-only standby, pgaudit lines in `audit-*.log` |
 | 5 | `backup_now.yml` (backup from the standby to S3), WAL archiving healthy, `cluster_status.yml` |
-| 6 | `switchover.yml` |
-| 7 | automatic failover by repmgrd (primary stopped, witness consensus), `rejoin.yml` |
-| 8 | `rebuild_replica.yml` |
-| 9 | `site.yml` with a new `pg_version_full` leaves running nodes alone |
-| 10 | `minor_upgrade.yml` 17.10 → 17.11, lock moved |
-| 11 | `restore_pitr.yml` to a timestamp before a `DELETE`; standby re-cloned |
-| 12 | `major_upgrade.yml` 17 → 18 (`pg_upgrade --link`), data + extensions kept, fresh backup |
-| 13 | `site.yml` on 18 reports `changed=0` |
+| 6 | `work_mem` change applied by reload, no restart (postmaster start time unchanged) |
+| 7 | `max_connections` change reported as pending, applied with `pg_allow_restart=true` |
+| 8 | repmgr setting change: repmgrd restarted on one node at a time |
+| 9 | `switchover.yml` |
+| 10 | automatic failover by repmgrd (primary stopped), `rejoin.yml` |
+| 11 | `rebuild_replica.yml` |
+| 12 | network cut between the nodes: split-brain, detected (`SPLIT-BRAIN`), fenced and rejoined; old-primary writes lost |
+| 13 | `site.yml` with a new `pg_version_full` leaves running nodes alone |
+| 14 | `minor_upgrade.yml` 17.10 → 17.11, lock moved |
+| 15 | `restore_pitr.yml` to a timestamp before a `DELETE`; standby re-cloned |
+| 16 | `major_upgrade.yml` 17 → 18 (`pg_upgrade --link`), data + extensions kept, fresh backup |
+| 17 | `site.yml` on 18 reports `changed=0` |
 
 Single-node scenario (`repmgr_enabled: false`, `pg_fs_layout: regular`): converge,
 idempotence, backup on the primary, HA playbooks refuse to run.

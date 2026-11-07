@@ -1,4 +1,13 @@
 ---
+# One node at a time, and only where repmgrd was running: the cluster is never left
+# without a running repmgrd (with 2 nodes, the other one keeps monitoring meanwhile).
 - name: Restart repmgrd
-  ansible.builtin.command: systemctl try-restart {{ repmgr_service }}
+  ansible.builtin.shell: |
+    set -e
+    if systemctl is-active -q {{ repmgr_service }}; then
+      systemctl restart {{ repmgr_service }}
+      for i in $(seq 30); do systemctl is-active -q {{ repmgr_service }} && exit 0; sleep 1; done
+      echo "repmgrd did not come back" >&2; exit 1
+    fi
   changed_when: true
+  throttle: 1
